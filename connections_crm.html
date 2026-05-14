@@ -335,7 +335,8 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
 .outreach-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; color: var(--text2); }
 .date-input { padding: 3px 8px; border: 1px solid var(--input-border); border-radius: 5px; font-size: 12px; font-family: inherit; background: var(--input-bg); color: var(--input-color); }
 .score-breakdown { display: flex; gap: 10px; flex-wrap: wrap; }
-.score-item { text-align: center; }
+.score-item { text-align: center; min-width: 48px; }
+.profile-loading { color: #9ca3af; font-size: 13px; font-style: italic; padding: 8px 0; }
 .score-item .si-val { font-size: 20px; font-weight: 700; color: var(--score-val); }
 .score-item .si-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px; }
 .reason-text { font-size: 12px; color: var(--text2); font-style: italic; line-height: 1.5; }
@@ -389,803 +390,373 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
 </div>
 
 <script>
-// ── Constants ────────────────────────────────────────────────────────────────
-var FAM_LABELS = {
-  not_familiar:      'Not familiar',
-  somewhat_familiar: 'Somewhat familiar',
-  worked_together:   'Worked together',
-  very_close:        'Very close'
-};
-var REC_LABELS = {
-  na:                  'N/A',
-  would_not_recommend: 'Would not recommend',
-  neutral:             'Neutral',
-  would_work_with:     'Would work with',
-  strongly_recommend:  'Strongly recommend'
-};
+var FAM_LABELS = { not_familiar: 'Not familiar', somewhat_familiar: 'Somewhat familiar', worked_together: 'Worked together', very_close: 'Very close' };
+var REC_LABELS = { na: 'N/A', neutral: 'Neutral', would_work_with: 'Would work with', strongly_recommend: 'Strongly recommend' };
+var FAM_SHORT  = { not_familiar: 'N/A', somewhat_familiar: 'Some', worked_together: 'Worked', very_close: 'Close' };
+var REC_SHORT  = { na: 'N/A', would_not_recommend: 'No', neutral: 'Maybe', would_work_with: 'Yes', strongly_recommend: '★' };
 
-// ── Sort order maps ───────────────────────────────────────────────────────────
-var FAM_ORDER = { not_familiar: 0, somewhat_familiar: 1, worked_together: 2, very_close: 3 };
-var REC_ORDER = { na: 0, would_not_recommend: 1, neutral: 2, would_work_with: 3, strongly_recommend: 4 };
+// ── State ─────────────────────────────────────────────────────────────────────
+var tabs = []; var activeIdx = -1; var index = {}; var saveTimer = null;
+var famFilter = 'all'; var recFilter = 'all'; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
+var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
 
-// Short labels for inline segmented selector (hover title shows full label)
-var FAM_SHORT = { not_familiar: 'N/A', somewhat_familiar: 'Some', worked_together: 'Worked', very_close: 'Close' };
-var REC_SHORT = { na: 'N/A', would_not_recommend: 'No', neutral: 'Maybe', would_work_with: 'Yes', strongly_recommend: '★' };
-
-// ── State ────────────────────────────────────────────────────────────────────
-var tabs        = [];   // [{type, filename, label, count, data: null|[]}]
-var activeIdx   = -1;
-var ann         = {};   // shared across all tabs
-var saveTimer   = null;
-var famFilter   = 'all';
-var recFilter   = 'all';
-var activeSearch= '';
-var currentPage = 1;
-var PAGE_SIZE   = 50;
-var expandedTr      = null;
-var expandedDataRow = null;
-var sortCol     = null;  // active sort column key
-var sortDir     = 0;     // 0 = none, 1 = asc, 2 = desc
-var expandedUrl     = null;
-
-// ── Theme ────────────────────────────────────────────────────────────────────
-(function() {
-  var t = localStorage.getItem('crm-theme');
-  if (t === 'dark') {
-    document.documentElement.dataset.theme = 'dark';
-    document.addEventListener('DOMContentLoaded', function() {
-      var btn = document.getElementById('dark-toggle');
-      if (btn) btn.textContent = '☀️';
-    });
-  }
-})();
-
-function toggleDark() {
-  var isDark = document.documentElement.dataset.theme === 'dark';
-  document.documentElement.dataset.theme = isDark ? '' : 'dark';
-  localStorage.setItem('crm-theme', isDark ? '' : 'dark');
-  var btn = document.getElementById('dark-toggle');
-  if (btn) btn.textContent = isDark ? '🌙' : '☀️';
-}
-
-// ── Boot ─────────────────────────────────────────────────────────────────────
+// ── Boot ──────────────────────────────────────────────────────────────────────
 Promise.all([
-  fetch('/manifest').then(function(r) { return r.json(); }),
-  fetch('/annotations').then(function(r) { return r.json(); }).catch(function() { return {}; })
-]).then(function(results) {
-  var manifest    = results[0];
-  var annotations = results[1];
-  ann = annotations;
-  setStatus('', '');
+  fetch('/manifest').then(function(r){ return r.json(); }),
+  fetch('/index').then(function(r){ return r.json(); }).catch(function(){ return {}; })
+]).then(function(res) {
+  var manifest = res[0]; index = res[1]; setStatus('','');
 
-  (manifest.network || []).forEach(function(f) {
-    tabs.push({ type: 'network', filename: f.filename, label: f.label, count: f.count, data: null });
-  });
+  // Always-present "All Connections" tab sourced from index
+  var indexEntries = Object.keys(index).filter(function(k){ return k !== '_meta'; });
+  tabs.push({ type: 'network', label: 'All Connections', count: indexEntries.length, data: null });
+
+  // Role tabs from ranked files
   (manifest.roles || []).forEach(function(f) {
-    tabs.push({ type: 'role', filename: f.filename, label: f.label, count: f.count, data: null });
+    tabs.push({ type: 'role', filename: f.filename, label: f.label, count: f.count, data: null, scoremap: {} });
   });
 
   if (tabs.length === 0) {
-    document.getElementById('tbody').innerHTML =
-      '<tr><td colspan="10"><div class="empty-state">' +
-      '<h2>No data files found</h2>' +
-      '<p>Drop <strong>enriched_*.json</strong> or <strong>ranked_*.json</strong> files<br>' +
-      'into the same folder as crm_server.py, then refresh.</p>' +
-      '</div></td></tr>';
-    setStatus('No files', 'error');
-    return;
+    document.getElementById('tbody').innerHTML = '<tr><td colspan="10"><div class="empty-state"><h2>No data</h2><p>Run get-enriched-connections to build connections_index.json</p></div></td></tr>';
+    setStatus('No index file','error'); return;
   }
+  buildTabs(); activateTab(0);
+}).catch(function(){ setStatus('Server not responding','error'); });
 
-  buildTabs();
-  activateTab(0);
-}).catch(function() {
-  setStatus('Server not responding', 'error');
-});
-
-// ── Tabs ─────────────────────────────────────────────────────────────────────
+// ── Tab rendering ─────────────────────────────────────────────────────────────
 function buildTabs() {
-  var el = document.getElementById('tabs');
-  el.innerHTML = '';
-  var lastType = null;
+  var el = document.getElementById('tabs'); el.innerHTML = ''; var lastType = null;
   tabs.forEach(function(tab, idx) {
     if (lastType === 'network' && tab.type === 'role') {
-      var div = document.createElement('div');
-      div.className = 'tab-divider';
-      el.appendChild(div);
+      var d = document.createElement('div'); d.className = 'tab-divider'; el.appendChild(d);
     }
     lastType = tab.type;
     var btn = document.createElement('button');
     btn.className = 'tab-btn' + (idx === activeIdx ? ' active' : '');
     btn.textContent = tab.label;
     if (tab.count) {
-      var chip = document.createElement('span');
-      chip.className = 'tab-count';
-      chip.textContent = tab.count;
-      btn.appendChild(chip);
+      var chip = document.createElement('span'); chip.className = 'tab-count'; chip.textContent = tab.count; btn.appendChild(chip);
     }
-    btn.onclick = (function(i) { return function() { activateTab(i); }; })(idx);
+    btn.onclick = (function(i){ return function(){ activateTab(i); }; })(idx);
     el.appendChild(btn);
   });
 }
 
 function activateTab(idx) {
-  activeIdx    = idx;
-  famFilter    = 'all';
-  recFilter    = 'all';
-  activeSearch = '';
-  currentPage  = 1;
-  sortCol      = null;
-  sortDir      = 0;
+  activeIdx = idx; famFilter = 'all'; recFilter = 'all'; activeSearch = ''; currentPage = 1;
   document.getElementById('search').value = '';
-  document.querySelectorAll('.ftag').forEach(function(b) {
-    b.classList.toggle('sel', b.dataset.v === 'all');
-  });
+  document.querySelectorAll('.ftag').forEach(function(b){ b.classList.toggle('sel', b.dataset.v === 'all'); });
   buildTabs();
-
   var tab = tabs[idx];
   if (tab.data) { updateHeader(tab.type); renderPage(); return; }
-
-  document.getElementById('tbody').innerHTML =
-    '<tr class="loading-row"><td colspan="10">Loading ' + esc(tab.label) + '…</td></tr>';
-  document.getElementById('pager').innerHTML = '';
-  setStatus('Loading…', 'saving');
-
-  fetch('/data/' + tab.filename)
-    .then(function(r) { return r.json(); })
-    .then(function(raw) {
-      tab.data = raw.map(normalizeConn);
-      if (tab.type === 'role' && tab.data.length && tab.data[0]._role_name) {
-        tab.label = tab.data[0]._role_name;
-        buildTabs();
-      }
-      setStatus('', '');
-      updateHeader(tab.type);
-      renderPage();
-    })
-    .catch(function() { setStatus('Failed to load ' + tab.filename, 'error'); });
-}
-
-// ── Normalization ─────────────────────────────────────────────────────────────
-function slimPos(p) {
-  if (!p) return null;
-  if (typeof p === 'string') return p.trim() || null;
-  var title   = p.title || p.position || '';
-  var company = p.companyName || p.company || '';
-  var dur     = p.duration || '';
-  var parts   = [];
-  if (title && company) parts.push(title + ' at ' + company);
-  else if (title)       parts.push(title);
-  else if (company)     parts.push(company);
-  if (dur) parts.push('(' + dur + ')');
-  return parts.join(' ').trim() || null;
-}
-function slimList(lst, limit) {
-  var result = [];
-  (lst || []).slice(0, limit || 8).forEach(function(p) {
-    var s = slimPos(p);
-    if (s) result.push(s);
-  });
-  return result;
-}
-function normalizeConn(c) {
-  var url = c.url || c.linkedinUrl || '';
-  if (!url && c.originalQuery) {
-    var oq = c.originalQuery;
-    url = (typeof oq === 'object' ? (oq.query || '') : (oq || ''));
+  if (tab.type === 'network') {
+    // Load All Connections from index
+    tab.data = Object.entries(index)
+      .filter(function(kv){ return kv[0] !== '_meta'; })
+      .map(function(kv){ return normalizeConn(kv[0], kv[1]); });
+    updateHeader('network'); renderPage(); return;
   }
-  c.url             = (url || '').replace(/\/$/, '');
-  c.currentPosition = slimList(c.currentPosition || c.positions, 3);
-  c.experience      = slimList(c.experience, 8);
-  c._days_connected = c._days_connected || c.days_connected || 0;
-  c._name           = c.name || ((c.firstName || '') + ' ' + (c.lastName || '')).trim();
-  return c;
+  // Role tab — load ranked file
+  document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="10">Loading ' + esc(tab.label) + '...</td></tr>';
+  document.getElementById('pager').innerHTML = ''; setStatus('Loading...','saving');
+  fetch('/data/' + tab.filename).then(function(r){ return r.json(); }).then(function(raw) {
+    var rankings, meta;
+    if (raw._meta && raw.rankings) {
+      // New format
+      rankings = raw.rankings; meta = raw._meta;
+    } else if (Array.isArray(raw)) {
+      // Legacy format (old ranked_connections_*.json arrays)
+      rankings = raw.map(function(r){ return {
+        url: r.url || r.linkedinUrl || '',
+        final_score: r.final_score, llm_score: r.llm_score,
+        requirements_match: r.requirements_match, seniority_fit: r.seniority_fit,
+        domain_fit: r.domain_fit, relationship_bonus: r.relationship_bonus,
+        mobility_bonus: r.mobility_bonus, reason: r.reason,
+      }; });
+      meta = { roleName: raw[0] && raw[0]._role_name };
+    }
+    if (meta && meta.roleName) { tab.label = meta.roleName; buildTabs(); }
+    // Build scoremap
+    tab.scoremap = {};
+    rankings.forEach(function(r){ tab.scoremap[r.url] = r; });
+    // Merge with index for display
+    tab.data = rankings.map(function(r) {
+      var entry = index[r.url] || {};
+      var conn = normalizeConn(r.url, entry);
+      conn.final_score = r.final_score; conn.llm_score = r.llm_score;
+      conn.requirements_match = r.requirements_match; conn.seniority_fit = r.seniority_fit;
+      conn.domain_fit = r.domain_fit; conn.relationship_bonus = r.relationship_bonus;
+      conn.mobility_bonus = r.mobility_bonus; conn.reason = r.reason;
+      return conn;
+    });
+    setStatus('',''); updateHeader('role'); renderPage();
+  }).catch(function(){ setStatus('Failed to load ' + tab.filename,'error'); });
 }
 
-// ── Header + Sort ─────────────────────────────────────────────────────────────
-function thSort(label, col, extraClass, tip) {
-  var cls = 'sortable' + (extraClass ? ' ' + extraClass : '');
-  if (sortCol === col) cls += sortDir === 1 ? ' sort-asc' : ' sort-desc';
-  return '<th class="' + cls + '" onclick="sortBy(\'' + col + '\')"' + (tip ? ' title="' + tip + '"' : '') + '>' +
-         '<span class="sort-arrow">' + label + '</span></th>';
-}
-function thStatic(label, extraClass, tip) {
-  return '<th' + (extraClass ? ' class="' + extraClass + '"' : '') + (tip ? ' title="' + tip + '"' : '') + '>' + label + '</th>';
+function normalizeConn(url, entry) {
+  return {
+    url: url,
+    _name: ((entry.firstName || '') + ' ' + (entry.lastName || '')).trim() || url,
+    firstName: entry.firstName || '', lastName: entry.lastName || '',
+    headline: entry.headline || '',
+    location: entry.location || '',
+    currentTitle: entry.currentTitle || '',
+    currentCompany: entry.currentCompany || '',
+    tenureInRole: entry.tenureInRole || '',
+    daysConnected: entry.daysConnected || 0,
+  };
 }
 
+// ── Header ────────────────────────────────────────────────────────────────────
 function updateHeader(type) {
-  var thead = document.getElementById('thead-row');
+  var t = document.getElementById('thead-row');
   if (type === 'role') {
-    thead.innerHTML = '<tr>' +
-      thStatic('#', 'score-col') +
-      thSort('Name',        'name') +
-      thStatic('Position') +
-      thSort('Score',  'score', 'score-col', 'Final score = LLM score × 75% + Relationship bonus × 25%') +
-      thSort('Req.',   'req',   'score-col', 'Requirements match: how well this person has the specific skills & qualifications the role needs (1–10)') +
-      thSort('Senior.','senior','score-col', 'Seniority fit: are they at the right level? Too junior and too senior both score low (1–10)') +
-      thSort('Domain', 'domain','score-col', 'Domain fit: have they worked in a similar industry or built similar products? (1–10)') +
-      thSort('Familiarity', 'fam') +
-      thSort('Recommendation','rec') +
-      thStatic('') +
-      '</tr>';
+    t.innerHTML = '<tr><th class="score-col">#</th><th>Name</th><th>Position</th><th class="score-col">Score</th><th class="score-col">Req.</th><th class="score-col">Senior.</th><th class="score-col">Domain</th><th>Familiarity</th><th>Recommendation</th><th></th></tr>';
   } else {
-    thead.innerHTML = '<tr>' +
-      thSort('Name',          'name') +
-      thStatic('Position') +
-      thStatic('Location') +
-      thSort('Familiarity',   'fam') +
-      thSort('Recommendation','rec') +
-      thStatic('') +
-      '</tr>';
+    t.innerHTML = '<tr><th>Name</th><th>Position</th><th>Location</th><th>Familiarity</th><th>Recommendation</th><th></th></tr>';
   }
 }
 
-function sortBy(col) {
-  if (sortCol !== col) {
-    sortCol = col; sortDir = 2;          // first click → descending
-  } else if (sortDir === 2) {
-    sortDir = 1;                         // second click → ascending
-  } else {
-    sortCol = null; sortDir = 0;         // third click → reset
-  }
-  currentPage = 1;
-  var tab = tabs[activeIdx];
-  if (tab) updateHeader(tab.type);
-  renderPage();
-}
-
-function getSortVal(c, col) {
-  var a = getAnn(c.url);
-  switch (col) {
-    case 'name':   return (c._name || '').toLowerCase();
-    case 'score':  return c.final_score        || 0;
-    case 'req':    return c.requirements_match || 0;
-    case 'senior': return c.seniority_fit      || 0;
-    case 'domain': return c.domain_fit         || 0;
-    case 'fam':    return FAM_ORDER[a.familiarity    || 'not_familiar'] || 0;
-    case 'rec':    return REC_ORDER[a.recommendation || 'na']          || 0;
-    default:       return 0;
-  }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function esc(s) {
-  return (s || '').toString()
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-function scoreCls(v) { return v >= 7 ? 'hi' : v >= 4 ? 'mid' : 'lo'; }
+// ── Annotation helpers ────────────────────────────────────────────────────────
 function getAnn(url) {
-  return ann[url] || { familiarity: 'not_familiar', recommendation: 'na', notes: '', outreach: {} };
+  var e = index[url] || {};
+  return {
+    familiarity:    e.familiarity    || 'not_familiar',
+    recommendation: e.recommendation || 'na',
+    notes:          e.notes          || '',
+    outreach:       e.outreach       || { reached_out: false, date: '', outcome: '' },
+  };
 }
-function ensureAnn(url) {
-  if (!ann[url]) ann[url] = { familiarity: 'not_familiar', recommendation: 'na', notes: '', outreach: { reached_out: false, date: '', outcome: '' } };
-  return ann[url];
-}
-function setStatus(msg, cls) {
-  var el = document.getElementById('save-status');
-  el.textContent = msg;
-  el.className = 'save-status' + (cls ? ' ' + cls : '');
+function ensureEntry(url) {
+  if (!index[url]) index[url] = {
+    familiarity: 'not_familiar', recommendation: 'na', notes: '',
+    outreach: { reached_out: false, date: '', outcome: '' }
+  };
+  return index[url];
 }
 
-// ── Filter + search + sort ────────────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function scoreCls(v){ return v >= 7 ? 'hi' : v >= 4 ? 'mid' : 'lo'; }
+function setStatus(msg, cls){ var el = document.getElementById('save-status'); el.textContent = msg; el.className = 'save-status' + (cls ? ' '+cls : ''); }
+function handleFromUrl(url){ var m = (url||'').match(/\/in\/([^/?#]+)/); return m ? m[1] : null; }
+
+// ── Filtering & rendering ─────────────────────────────────────────────────────
 function getFiltered() {
-  var tab = tabs[activeIdx];
-  if (!tab || !tab.data) return [];
+  var tab = tabs[activeIdx]; if (!tab || !tab.data) return [];
   var q = activeSearch.toLowerCase();
-  var result = tab.data.filter(function(c) {
+  return tab.data.filter(function(c) {
     var a = getAnn(c.url);
-    if (famFilter !== 'all' && a.familiarity    !== famFilter) return false;
+    if (famFilter !== 'all' && a.familiarity !== famFilter) return false;
     if (recFilter !== 'all' && a.recommendation !== recFilter) return false;
     if (!q) return true;
-    var hay = (c._name + ' ' + (c.headline || '') + ' ' +
-               (c.currentPosition || []).join(' ') + ' ' +
-               (c.experience || []).join(' ')).toLowerCase();
+    var hay = (c._name + ' ' + (c.headline||'') + ' ' + (c.currentTitle||'') + ' ' + (c.currentCompany||'')).toLowerCase();
     return hay.indexOf(q) !== -1;
   });
-  if (sortCol && sortDir) {
-    result = result.slice().sort(function(a, b) {
-      var av = getSortVal(a, sortCol), bv = getSortVal(b, sortCol);
-      var cmp = av < bv ? -1 : av > bv ? 1 : 0;
-      return sortDir === 2 ? -cmp : cmp;
-    });
-  }
-  return result;
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
 function renderPage() {
   closeExpand();
-  var tab      = tabs[activeIdx];
-  var filtered = getFiltered();
-  var total    = filtered.length;
-  var pages    = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  var tab = tabs[activeIdx]; var filtered = getFiltered(); var total = filtered.length;
+  var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (currentPage > pages) currentPage = 1;
-  var slice    = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE);
-  var type     = tab ? tab.type : 'network';
-
-  var tbody = document.getElementById('tbody');
-  tbody.innerHTML = '';
-
+  var slice = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE);
+  var type = tab ? tab.type : 'network';
+  var tbody = document.getElementById('tbody'); tbody.innerHTML = '';
   if (total === 0) {
     tbody.innerHTML = '<tr><td colspan="10" class="no-results">No connections match.</td></tr>';
   } else {
     var frag = document.createDocumentFragment();
     slice.forEach(function(c, idx) {
-      var url = c.url;
-      var a   = getAnn(url);
-      var pos = (c.currentPosition || []).concat(c.experience || []).filter(Boolean);
-      var fam = a.familiarity    || 'not_familiar';
-      var rec = a.recommendation || 'na';
-
-      var tr = document.createElement('tr');
-      tr.className = 'data-row';
-      tr.dataset.url = url;
-
-      var nameCell = url
-        ? '<a class="name-link" href="' + esc(url) + '" target="_blank" onclick="event.stopPropagation()">' + esc(c._name) + '</a>'
-        : esc(c._name);
-      var posCell =
-        (pos[0] ? '<div class="pos-main">' + esc(pos[0]) + '</div>' : '') +
-        (pos[1] ? '<div class="pos-sub">'  + esc(pos[1]) + '</div>' : '');
-      var famCell = '<div class="ann-seg">' + Object.keys(FAM_LABELS).map(function(v) {
-        var locked = false;
-        return '<span class="ann-seg-btn fam-' + v + (fam === v ? ' active' : '') + '" ' +
-               'onclick="event.stopPropagation();segPick(\'' + esc(url) + '\',\'fam\',\'' + v + '\')" ' +
-               'title="' + esc(FAM_LABELS[v]) + '">' + FAM_SHORT[v] + '</span>';
-      }).join('') + '</div>';
-      var locked_rec = fam === 'not_familiar';
-      var recCell = '<div class="ann-seg">' + Object.keys(REC_LABELS).map(function(v) {
-        var isLocked = locked_rec && v !== 'na';
-        return '<span class="ann-seg-btn rec-' + v + (rec === v ? ' active' : '') + (isLocked ? ' ann-seg-locked' : '') + '" ' +
-               (isLocked ? '' : 'onclick="event.stopPropagation();segPick(\'' + esc(url) + '\',\'rec\',\'' + v + '\')" ') +
-               'title="' + esc(REC_LABELS[v]) + '">' + REC_SHORT[v] + '</span>';
-      }).join('') + '</div>';
-
+      var url = c.url; var a = getAnn(url);
+      var fam = a.familiarity || 'not_familiar'; var rec = a.recommendation || 'na';
+      var tr = document.createElement('tr'); tr.className = 'data-row'; tr.dataset.url = url;
+      var nameCell = url ? '<a class="name-link" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()">'+esc(c._name)+'</a>' : esc(c._name);
+      var pos1 = c.currentTitle && c.currentCompany ? c.currentTitle + ' at ' + c.currentCompany : (c.currentTitle || c.currentCompany || c.headline || '');
+      var pos2 = c.tenureInRole || '';
+      var posCell = (pos1 ? '<div class="pos-main">'+esc(pos1)+'</div>' : '') + (pos2 ? '<div class="pos-sub">'+esc(pos2)+'</div>' : '');
+      var famCell = '<span class="fam-badge '+fam+'">'+FAM_LABELS[fam]+'</span>';
+      var recCell = '<span class="rec-badge '+rec+'">'+REC_LABELS[rec]+'</span>';
       var cells = '';
       if (type === 'role') {
-        var rank = (currentPage-1)*PAGE_SIZE + idx + 1;
-        var fs   = c.final_score        || 0;
-        var rm   = c.requirements_match || 0;
-        var sf   = c.seniority_fit      || 0;
-        var df   = c.domain_fit         || 0;
-        cells =
-          '<td class="td-rank">' + rank + '</td>' +
-          '<td class="td-name">' + nameCell + '</td>' +
-          '<td class="td-pos">' + posCell + '</td>' +
-          '<td class="td-score"><span class="final-score">' + fs.toFixed(1) + '</span></td>' +
-          '<td class="td-score"><span class="score-pill ' + scoreCls(rm) + '">' + rm + '</span></td>' +
-          '<td class="td-score"><span class="score-pill ' + scoreCls(sf) + '">' + sf + '</span></td>' +
-          '<td class="td-score"><span class="score-pill ' + scoreCls(df) + '">' + df + '</span></td>' +
-          '<td class="td-fam">' + famCell + '</td>' +
-          '<td class="td-rec">' + recCell + '</td>' +
-          '<td class="td-chev">&#8250;</td>';
+        var rank = (currentPage-1)*PAGE_SIZE+idx+1; var fs = c.final_score||0;
+        var rm = c.requirements_match||0; var sf = c.seniority_fit||0; var df = c.domain_fit||0;
+        cells = '<td class="td-rank">'+rank+'</td><td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
+          '<td class="td-score"><span class="final-score">'+fs.toFixed(1)+'</span></td>'+
+          '<td class="td-score"><span class="score-pill '+scoreCls(rm)+'">'+rm+'</span></td>'+
+          '<td class="td-score"><span class="score-pill '+scoreCls(sf)+'">'+sf+'</span></td>'+
+          '<td class="td-score"><span class="score-pill '+scoreCls(df)+'">'+df+'</span></td>'+
+          '<td class="td-fam">'+famCell+'</td><td class="td-rec">'+recCell+'</td><td class="td-chev">&#8250;</td>';
       } else {
-        var loc = '';
-        if (c.location) {
-          var l = c.location;
-          loc = l.city ? l.city + (l.country ? ', ' + l.country : '') : (l.text || l.country || '');
-        }
-        cells =
-          '<td class="td-name">' + nameCell + '</td>' +
-          '<td class="td-pos">' + posCell + '</td>' +
-          '<td class="td-loc">' + esc(loc) + '</td>' +
-          '<td class="td-fam">' + famCell + '</td>' +
-          '<td class="td-rec">' + recCell + '</td>' +
-          '<td class="td-chev">&#8250;</td>';
+        cells = '<td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
+          '<td class="td-loc">'+esc(c.location||'')+'</td>'+
+          '<td class="td-fam">'+famCell+'</td><td class="td-rec">'+recCell+'</td><td class="td-chev">&#8250;</td>';
       }
       tr.innerHTML = cells;
+      tr.addEventListener('click', (function(u, row, conn, t){ return function(){ toggleExpand(u, row, conn, t); }; })(url, tr, c, type));
       frag.appendChild(tr);
     });
     tbody.appendChild(frag);
   }
-
-  // Pager
   var pg = document.getElementById('pager');
-  var pages2 = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  pg.innerHTML = pages2 <= 1 ? '' :
-    '<button class="pg-btn" onclick="goPage('+(currentPage-1)+')"'+(currentPage===1?' disabled':'')+'>&#8592; Prev</button>' +
-    '<span class="pg-info">Page ' + currentPage + ' of ' + pages2 + ' &nbsp;·&nbsp; ' + total + ' shown</span>' +
-    '<button class="pg-btn" onclick="goPage('+(currentPage+1)+')"'+(currentPage===pages2?' disabled':'')+'>Next &#8594;</button>';
-
-  var all = tab && tab.data ? tab.data.length : 0;
-  document.getElementById('vis-count').textContent = total + ' of ' + all;
+  var pages2 = Math.max(1, Math.ceil(total/PAGE_SIZE));
+  pg.innerHTML = pages2 <= 1 ? '' : '<button class="pg-btn" onclick="goPage('+(currentPage-1)+')"'+(currentPage===1?' disabled':'')+'>&#8592; Prev</button><span class="pg-info">Page '+currentPage+' of '+pages2+' &nbsp;&middot;&nbsp; '+total+' shown</span><button class="pg-btn" onclick="goPage('+(currentPage+1)+')"'+(currentPage===pages2?' disabled':'')+'>Next &#8594;</button>';
+  document.getElementById('vis-count').textContent = total + ' of ' + (tab && tab.data ? tab.data.length : 0);
   updateChips();
 }
 
-function goPage(n) { currentPage = n; renderPage(); window.scrollTo(0,0); }
+function goPage(n){ currentPage = n; renderPage(); window.scrollTo(0,0); }
 
 function updateChips() {
-  var tab  = tabs[activeIdx];
-  var data = tab && tab.data ? tab.data : [];
+  var tab = tabs[activeIdx]; var data = tab && tab.data ? tab.data : [];
   var famC = {}, recC = {};
-  data.forEach(function(c) {
-    var a = getAnn(c.url);
-    var f = a.familiarity    || 'not_familiar';
-    var r = a.recommendation || 'na';
-    famC[f] = (famC[f]||0)+1;
-    recC[r] = (recC[r]||0)+1;
+  data.forEach(function(c){ var a = getAnn(c.url); famC[a.familiarity||'not_familiar'] = (famC[a.familiarity||'not_familiar']||0)+1; recC[a.recommendation||'na'] = (recC[a.recommendation||'na']||0)+1; });
+  document.querySelectorAll('.ftag[data-dim="fam"][data-v]').forEach(function(btn){
+    var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
+    if (v !== 'all' && famC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = famC[v]; btn.appendChild(ch); }
   });
-  document.querySelectorAll('.ftag[data-dim="fam"][data-v]').forEach(function(btn) {
-    var v = btn.dataset.v, chip = btn.querySelector('.count-chip');
-    if (chip) chip.remove();
-    if (v !== 'all' && famC[v]) {
-      var ch = document.createElement('span'); ch.className='count-chip'; ch.textContent=famC[v]; btn.appendChild(ch);
-    }
-  });
-  document.querySelectorAll('.ftag[data-dim="rec"][data-v]').forEach(function(btn) {
-    var v = btn.dataset.v, chip = btn.querySelector('.count-chip');
-    if (chip) chip.remove();
-    if (v !== 'all' && recC[v]) {
-      var ch = document.createElement('span'); ch.className='count-chip'; ch.textContent=recC[v]; btn.appendChild(ch);
-    }
+  document.querySelectorAll('.ftag[data-dim="rec"][data-v]').forEach(function(btn){
+    var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
+    if (v !== 'all' && recC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = recC[v]; btn.appendChild(ch); }
   });
 }
 
-// ── Expand ────────────────────────────────────────────────────────────────────
+// ── Expand panel ──────────────────────────────────────────────────────────────
 function closeExpand() {
   if (expandedTr) { expandedTr.remove(); expandedTr = null; }
-  if (expandedDataRow) {
-    expandedDataRow.classList.remove('expanded');
-    var ch = expandedDataRow.querySelector('.td-chev');
-    if (ch) ch.textContent = '›';
-    expandedDataRow = null;
-  }
+  if (expandedDataRow) { expandedDataRow.classList.remove('expanded'); var ch = expandedDataRow.querySelector('.td-chev'); if (ch) ch.textContent = '›'; expandedDataRow = null; }
   expandedUrl = null;
 }
 
 function toggleExpand(url, tr, c, type) {
-  var wasOpen = (expandedUrl === url);
-  closeExpand();
-  if (wasOpen) return;
+  var wasOpen = (expandedUrl === url); closeExpand(); if (wasOpen) return;
+  expandedUrl = url; expandedDataRow = tr; tr.classList.add('expanded');
+  var chev = tr.querySelector('.td-chev'); if (chev) chev.textContent = '⌄';
 
-  expandedUrl     = url;
-  expandedDataRow = tr;
-  tr.classList.add('expanded');
-  var chev = tr.querySelector('.td-chev');
-  if (chev) chev.textContent = '⌄';
-
-  var a          = getAnn(url);
-  var fam        = a.familiarity    || 'not_familiar';
-  var rec        = a.recommendation || 'na';
-  var allPos     = (c.currentPosition||[]).concat(c.experience||[]).filter(Boolean);
-  var notFamiliar= (fam === 'not_familiar');
-
-  var famPills = Object.keys(FAM_LABELS).map(function(v) {
-    return '<button class="ann-pill'+(fam===v?' active':'')+'" data-dim="fam" data-v="'+v+
-      '" onclick="pickAnn(this,event,\''+url+'\',\'fam\')">'+FAM_LABELS[v]+'</button>';
-  }).join('');
-
-  var recPills = Object.keys(REC_LABELS).map(function(v) {
-    var dis = (notFamiliar && v !== 'na') ? ' disabled' : '';
-    return '<button class="ann-pill'+(rec===v?' active':'')+dis+'" data-dim="rec" data-v="'+v+
-      '" onclick="pickAnn(this,event,\''+url+'\',\'rec\')">'+REC_LABELS[v]+'</button>';
-  }).join('');
+  var a = getAnn(url); var fam = a.familiarity || 'not_familiar'; var rec = a.recommendation || 'na';
+  var notFamiliar = (fam === 'not_familiar');
+  var famPills = Object.keys(FAM_LABELS).map(function(v){ return '<button class="ann-pill'+(fam===v?' active':'')+'" data-dim="fam" data-v="'+v+'" onclick="pickAnn(this,event,\''+url+'\',\'fam\')">'+FAM_LABELS[v]+'</button>'; }).join('');
+  var recPills = Object.keys(REC_LABELS).map(function(v){ var dis = (notFamiliar && v !== 'na') ? ' disabled' : ''; return '<button class="ann-pill'+(rec===v?' active':'')+dis+'" data-dim="rec" data-v="'+v+'" onclick="pickAnn(this,event,\''+url+'\',\'rec\')">'+REC_LABELS[v]+'</button>'; }).join('');
 
   var scoreSection = '';
   if (type === 'role' && c.final_score != null) {
-    scoreSection =
-      '<div class="lbl">Score breakdown</div>' +
-      '<div class="score-breakdown">' +
-        '<div class="score-item"><div class="si-val">'+(c.final_score||0).toFixed(1)+'</div><div class="si-lbl">Final</div></div>' +
-        '<div class="score-item"><div class="si-val">'+(c.requirements_match||0)+'</div><div class="si-lbl">Req.</div></div>' +
-        '<div class="score-item"><div class="si-val">'+(c.seniority_fit||0)+'</div><div class="si-lbl">Seniority</div></div>' +
-        '<div class="score-item"><div class="si-val">'+(c.domain_fit||0)+'</div><div class="si-lbl">Domain</div></div>' +
-        '<div class="score-item"><div class="si-val">'+(c.relationship_bonus||0)+'</div><div class="si-lbl">Tenure</div></div>' +
-      '</div>' +
-      (c.reason ? '<div class="reason-text">'+esc(c.reason)+'</div>' : '');
+    scoreSection = '<div class="lbl">Score breakdown</div><div class="score-breakdown">'+
+      '<div class="score-item"><div class="si-val">'+(c.final_score||0).toFixed(1)+'</div><div class="si-lbl">Final</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.requirements_match||0)+'</div><div class="si-lbl">Req.</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.seniority_fit||0)+'</div><div class="si-lbl">Seniority</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.domain_fit||0)+'</div><div class="si-lbl">Domain</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.relationship_bonus||0)+'</div><div class="si-lbl">Tenure</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.mobility_bonus||0)+'</div><div class="si-lbl">Mobility</div></div>'+
+      '</div>'+(c.reason ? '<div class="reason-text">'+esc(c.reason)+'</div>' : '');
   }
 
-  var colSpan = (type === 'role') ? '10' : '6';
-  var outreach = a.outreach || {};
-  var xtr = document.createElement('tr');
-  xtr.className = 'expand-row';
-  xtr.innerHTML =
-    '<td colspan="'+colSpan+'"><div class="expand-panel">' +
-      '<div class="ep-col">' +
-        '<div class="lbl">Familiarity</div>' +
-        '<div class="pill-row" id="fp-'+url+'">'+famPills+'</div>' +
-        '<div class="lbl">Recommendation</div>' +
-        '<div class="pill-row" id="rp-'+url+'">'+recPills+'</div>' +
-        '<div class="lbl">Notes</div>' +
-        '<textarea class="notes-box" placeholder="Notes about this person..." oninput="onField(this,\''+url+'\',\'notes\')">'+esc(a.notes||'')+'</textarea>' +
-      '</div>' +
-      '<div class="ep-col">' +
-        (scoreSection ? scoreSection+'<div style="margin-top:6px"></div>' : '') +
-        (allPos.length > 2 ? '<div class="lbl">All positions</div><div class="all-pos">'+allPos.map(esc).join('<br>')+'</div>' : '') +
-        '<div class="lbl">Outreach</div>' +
-        '<div class="outreach-row">' +
-          '<label class="outreach-toggle">' +
-            '<input type="checkbox"'+(outreach.reached_out?' checked':'')+' onchange="onCheck(this,\''+url+'\')"> Reached out' +
-          '</label>' +
-          '<input type="date" class="date-input" value="'+esc(outreach.date||'')+'" onchange="onDate(this,\''+url+'\')">' +
-        '</div>' +
-        '<textarea class="outcome-box" placeholder="Outcome / notes..." oninput="onField(this,\''+url+'\',\'outcome\')">'+esc(outreach.outcome||'')+'</textarea>' +
-      '</div>' +
-    '</div></td>';
+  var colSpan = (type === 'role') ? '10' : '6'; var outreach = a.outreach || {};
+  var xtr = document.createElement('tr'); xtr.className = 'expand-row';
+  xtr.innerHTML = '<td colspan="'+colSpan+'"><div class="expand-panel">'+
+    '<div class="ep-col">'+
+      '<div class="lbl">Familiarity</div><div class="pill-row" id="fp-'+esc(url)+'">'+famPills+'</div>'+
+      '<div class="lbl">Recommendation</div><div class="pill-row" id="rp-'+esc(url)+'">'+recPills+'</div>'+
+      '<div class="lbl">Notes</div><textarea class="notes-box" placeholder="Notes..." oninput="onField(this,\''+url+'\',\'notes\')">'+esc(a.notes||'')+'</textarea>'+
+    '</div>'+
+    '<div class="ep-col" id="profile-col-'+esc(url)+'">'+
+      (scoreSection ? scoreSection+'<div style="margin-top:6px"></div>' : '')+
+      '<div class="profile-loading">Loading profile...</div>'+
+      '<div class="lbl">Outreach</div>'+
+      '<div class="outreach-row"><label class="outreach-toggle"><input type="checkbox"'+(outreach.reached_out?' checked':'')+' onchange="onCheck(this,\''+url+'\')"> Reached out</label>'+
+      '<input type="date" class="date-input" value="'+esc(outreach.date||'')+'" onchange="onDate(this,\''+url+'\')"></div>'+
+      '<textarea class="outcome-box" placeholder="Outcome..." oninput="onField(this,\''+url+'\',\'outcome\')">'+esc(outreach.outcome||'')+'</textarea>'+
+    '</div></div></td>';
+  expandedTr = xtr; tr.insertAdjacentElement('afterend', xtr);
 
-  expandedTr = xtr;
-  tr.insertAdjacentElement('afterend', xtr);
+  // Lazy-load profile data
+  var handle = handleFromUrl(url);
+  if (handle) {
+    fetch('/profiles/' + handle).then(function(r){ return r.json(); }).then(function(profile) {
+      renderProfileInPanel(url, profile);
+    }).catch(function() {
+      var col = document.getElementById('profile-col-' + url);
+      if (col) { var pl = col.querySelector('.profile-loading'); if (pl) pl.textContent = 'Profile not available.'; }
+    });
+  }
+}
+
+function renderProfileInPanel(url, profile) {
+  var col = document.getElementById('profile-col-' + url);
+  if (!col) return;
+  var pl = col.querySelector('.profile-loading');
+  if (!pl) return;
+
+  // Build positions list
+  var allPos = [];
+  (profile.currentPosition || []).forEach(function(p) { var s = slimPos(p); if (s) allPos.push(s); });
+  (profile.experience || []).forEach(function(p) { var s = slimPos(p); if (s) allPos.push(s); });
+
+  var html = '';
+  if (allPos.length > 0) {
+    html += '<div class="lbl">Experience</div><div class="all-pos">'+allPos.map(esc).join('<br>')+'</div>';
+  }
+  if (profile.about) {
+    html += '<div class="lbl" style="margin-top:8px">About</div><div class="reason-text">'+esc(profile.about)+'</div>';
+  }
+  if (html) {
+    pl.outerHTML = html;
+  } else {
+    pl.textContent = '';
+  }
+}
+
+function slimPos(p) {
+  if (!p) return null;
+  if (typeof p === 'string') return p.trim() || null;
+  var title = p.title || p.position || '', company = p.companyName || '', dur = p.duration || '';
+  var base = (title && company) ? title+' at '+company : (title || company);
+  return (dur ? base+' ('+dur+')' : base).trim() || null;
 }
 
 // ── Annotation handlers ───────────────────────────────────────────────────────
 function pickAnn(btn, e, url, dim) {
-  e.stopPropagation();
-  var v = btn.dataset.v;
-  var a = ensureAnn(url);
-
+  e.stopPropagation(); var v = btn.dataset.v; var entry = ensureEntry(url);
   if (dim === 'fam') {
-    a.familiarity = v;
+    entry.familiarity = v;
     if (v === 'not_familiar') {
-      a.recommendation = 'na';
-      var rpr = document.getElementById('rp-' + url);
-      if (rpr) rpr.querySelectorAll('.ann-pill').forEach(function(p) {
-        p.classList.toggle('active',   p.dataset.v === 'na');
-        p.classList.toggle('disabled', p.dataset.v !== 'na');
-      });
-      if (expandedDataRow) {
-        var rb = expandedDataRow.querySelector('.rec-badge');
-        if (rb) { rb.className = 'rec-badge na'; rb.textContent = REC_LABELS['na']; }
-      }
+      entry.recommendation = 'na';
+      var rpr = document.getElementById('rp-'+url);
+      if (rpr) rpr.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.toggle('active', p.dataset.v==='na'); p.classList.toggle('disabled', p.dataset.v!=='na'); });
+      if (expandedDataRow) { var rb = expandedDataRow.querySelector('.rec-badge'); if (rb) { rb.className='rec-badge na'; rb.textContent=REC_LABELS['na']; } }
     } else {
-      var rpr2 = document.getElementById('rp-' + url);
-      if (rpr2) rpr2.querySelectorAll('.ann-pill').forEach(function(p) { p.classList.remove('disabled'); });
+      var rpr2 = document.getElementById('rp-'+url);
+      if (rpr2) rpr2.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.remove('disabled'); });
     }
-    if (expandedDataRow) {
-      var fb = expandedDataRow.querySelector('.fam-badge');
-      if (fb) { fb.className = 'fam-badge ' + v; fb.textContent = FAM_LABELS[v]; }
-    }
+    if (expandedDataRow) { var fb = expandedDataRow.querySelector('.fam-badge'); if (fb) { fb.className='fam-badge '+v; fb.textContent=FAM_LABELS[v]; } }
   } else {
-    a.recommendation = v;
-    if (expandedDataRow) {
-      var rb2 = expandedDataRow.querySelector('.rec-badge');
-      if (rb2) { rb2.className = 'rec-badge ' + v; rb2.textContent = REC_LABELS[v]; }
-    }
+    entry.recommendation = v;
+    if (expandedDataRow) { var rb2 = expandedDataRow.querySelector('.rec-badge'); if (rb2) { rb2.className='rec-badge '+v; rb2.textContent=REC_LABELS[v]; } }
   }
-
-  btn.closest('.pill-row').querySelectorAll('.ann-pill[data-dim="'+dim+'"]').forEach(function(p) {
-    p.classList.toggle('active', p.dataset.v === v);
-  });
+  btn.closest('.pill-row').querySelectorAll('.ann-pill[data-dim="'+dim+'"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
   scheduleSave(); updateChips();
 }
 
 function onField(el, url, field) {
-  var a = ensureAnn(url);
-  if (field === 'notes')   { a.notes = el.value; }
-  if (field === 'outcome') { if (!a.outreach) a.outreach={}; a.outreach.outcome = el.value; }
+  var entry = ensureEntry(url);
+  if (field === 'notes') { entry.notes = el.value; }
+  if (field === 'outcome') { if (!entry.outreach) entry.outreach={}; entry.outreach.outcome = el.value; }
   scheduleSave();
 }
-function onCheck(el, url) {
-  var a = ensureAnn(url); if (!a.outreach) a.outreach={};
-  a.outreach.reached_out = el.checked; scheduleSave();
-}
-function onDate(el, url) {
-  var a = ensureAnn(url); if (!a.outreach) a.outreach={};
-  a.outreach.date = el.value; scheduleSave();
-}
+function onCheck(el, url) { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.reached_out = el.checked; scheduleSave(); }
+function onDate(el, url)  { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.date = el.value; scheduleSave(); }
 
 function setFilter(dim, v) {
-  if (dim === 'fam') famFilter = v;
-  else               recFilter = v;
-  currentPage = 1;
-  document.querySelectorAll('.ftag[data-dim="'+dim+'"]').forEach(function(b) {
-    b.classList.toggle('sel', b.dataset.v === v);
-  });
-  renderPage();
+  if (dim === 'fam') famFilter = v; else recFilter = v; currentPage = 1;
+  document.querySelectorAll('.ftag[data-dim="'+dim+'"]').forEach(function(b){ b.classList.toggle('sel', b.dataset.v===v); }); renderPage();
 }
 
-document.getElementById('search').addEventListener('input', function(e) {
-  activeSearch = e.target.value; currentPage = 1; renderPage();
-});
+document.getElementById('search').addEventListener('input', function(e){ activeSearch = e.target.value; currentPage = 1; renderPage(); });
 
-// ── Badge dropdown (inline annotation) ───────────────────────────────────────
-var activeDropdown = null;
-var FAM_COLORS = { not_familiar:'#6b7280', somewhat_familiar:'#2563eb', worked_together:'#7c3aed', very_close:'#0891b2' };
-var REC_COLORS = { na:'#6b7280', would_not_recommend:'#dc2626', neutral:'#d97706', would_work_with:'#16a34a', strongly_recommend:'#4f46e5' };
-
-function openBadgeDropdown(badge, url, dim) {
-  // Toggle if same badge clicked again
-  if (activeDropdown && activeDropdown._url === url && activeDropdown._dim === dim) {
-    closeDropdown(); return;
-  }
-  closeDropdown();
-
-  var a          = ensureAnn(url);
-  var curVal     = dim === 'fam' ? (a.familiarity || 'not_familiar') : (a.recommendation || 'na');
-  var labels     = dim === 'fam' ? FAM_LABELS : REC_LABELS;
-  var colors     = dim === 'fam' ? FAM_COLORS : REC_COLORS;
-  var locked_rec = (a.familiarity || 'not_familiar') === 'not_familiar';
-
-  var dd = document.createElement('div');
-  dd.className = 'badge-dropdown';
-  dd._url = url; dd._dim = dim;
-
-  Object.keys(labels).forEach(function(v) {
-    var isLocked = (dim === 'rec' && locked_rec && v !== 'na');
-    var item = document.createElement('div');
-    item.className = 'bdi' + (v === curVal ? ' bdi-active' : '') + (isLocked ? ' bdi-locked' : '');
-    var dot = document.createElement('span');
-    dot.className = 'bdi-dot'; dot.style.background = colors[v];
-    item.appendChild(dot);
-    item.appendChild(document.createTextNode(labels[v]));
-    if (!isLocked) {
-      item.onclick = function(e) {
-        e.stopPropagation();
-        applyBadgeChange(url, dim, v);
-        closeDropdown();
-      };
-    }
-    dd.appendChild(item);
-  });
-
-  document.body.appendChild(dd);
-  activeDropdown = dd;
-
-  var rect = badge.getBoundingClientRect();
-  dd.style.left = rect.left + 'px';
-  dd.style.top  = (rect.bottom + 4) + 'px';
-
-  // Adjust if off right/bottom edge
-  requestAnimationFrame(function() {
-    if (!activeDropdown) return;
-    var dr = dd.getBoundingClientRect();
-    if (dr.right  > window.innerWidth  - 8) dd.style.left = Math.max(8, window.innerWidth  - dr.width  - 8) + 'px';
-    if (dr.bottom > window.innerHeight - 8) dd.style.top  = (rect.top - dr.height - 4) + 'px';
-  });
-}
-
-function closeDropdown() {
-  if (activeDropdown) { activeDropdown.remove(); activeDropdown = null; }
-}
-
-function trByUrl(url) {
-  var rows = document.querySelectorAll('tr.data-row');
-  for (var i = 0; i < rows.length; i++) {
-    if (rows[i].dataset.url === url) return rows[i];
-  }
-  return null;
-}
-
-function applyBadgeChange(url, dim, v) {
-  var a = ensureAnn(url);
-  if (dim === 'fam') {
-    a.familiarity = v;
-    if (v === 'not_familiar') a.recommendation = 'na';
-  } else {
-    a.recommendation = v;
-  }
-
-  // Update table row badges
-  var tr = trByUrl(url);
-  if (tr) {
-    if (dim === 'fam') {
-      var fb = tr.querySelector('.fam-badge');
-      if (fb) { fb.className = 'fam-badge ' + v; fb.textContent = FAM_LABELS[v]; }
-      if (v === 'not_familiar') {
-        var rb = tr.querySelector('.rec-badge');
-        if (rb) { rb.className = 'rec-badge na'; rb.textContent = REC_LABELS['na']; }
-      }
-    } else {
-      var rb2 = tr.querySelector('.rec-badge');
-      if (rb2) { rb2.className = 'rec-badge ' + v; rb2.textContent = REC_LABELS[v]; }
-    }
-  }
-
-  // Sync expand panel pills if open for this row
-  if (expandedUrl === url) {
-    if (dim === 'fam') {
-      var fp = document.getElementById('fp-' + url);
-      if (fp) fp.querySelectorAll('.ann-pill').forEach(function(p) { p.classList.toggle('active', p.dataset.v === v); });
-      if (v === 'not_familiar') {
-        var rp = document.getElementById('rp-' + url);
-        if (rp) rp.querySelectorAll('.ann-pill').forEach(function(p) {
-          p.classList.toggle('active',   p.dataset.v === 'na');
-          p.classList.toggle('disabled', p.dataset.v !== 'na');
-        });
-      } else {
-        var rp2 = document.getElementById('rp-' + url);
-        if (rp2) rp2.querySelectorAll('.ann-pill').forEach(function(p) { p.classList.remove('disabled'); });
-      }
-    } else {
-      var rp3 = document.getElementById('rp-' + url);
-      if (rp3) rp3.querySelectorAll('.ann-pill').forEach(function(p) { p.classList.toggle('active', p.dataset.v === v); });
-    }
-  }
-
-  scheduleSave(); updateChips();
-}
-
-// ── Inline segmented annotation pick ─────────────────────────────────────────
-function segPick(url, dim, v) {
-  var a = ensureAnn(url);
-  if (dim === 'fam') {
-    a.familiarity = v;
-    if (v === 'not_familiar') a.recommendation = 'na';
-  } else {
-    a.recommendation = v;
-  }
-  // Refresh just the seg buttons in this row without re-rendering the whole page
-  var tr = trByUrl(url);
-  if (tr) {
-    var notFam = (a.familiarity || 'not_familiar') === 'not_familiar';
-    tr.querySelectorAll('.ann-seg-btn').forEach(function(btn) {
-      var isFam = btn.classList.contains('fam-' + btn.className.match(/fam-(\S+)/)?.[1]);
-      var btnDim = btn.className.match(/\b(fam|rec)-(\S+?)\b/) ? btn.className.match(/\b(fam|rec)-(\S+?)\b/)[1] : null;
-      var btnVal = btn.className.match(/\b(?:fam|rec)-([^\s]+)/)?.[1];
-      if (!btnDim || !btnVal) return;
-      if (btnDim === 'fam') {
-        btn.classList.toggle('active', btnVal === a.familiarity);
-      } else {
-        var locked = notFam && btnVal !== 'na';
-        btn.classList.toggle('active',      btnVal === a.recommendation && !notFam || (notFam && btnVal === 'na'));
-        btn.classList.toggle('ann-seg-locked', locked);
-        if (locked) btn.removeAttribute('onclick');
-        else btn.setAttribute('onclick', "event.stopPropagation();segPick('" + url + "','rec','" + btnVal + "')");
-      }
-    });
-    // Also sync expand panel if open
-    if (expandedUrl === url) {
-      if (dim === 'fam') {
-        var fp = document.getElementById('fp-' + url);
-        if (fp) fp.querySelectorAll('.ann-pill').forEach(function(p) { p.classList.toggle('active', p.dataset.v === v); });
-        var rp = document.getElementById('rp-' + url);
-        if (rp) rp.querySelectorAll('.ann-pill').forEach(function(p) {
-          p.classList.toggle('active',   p.dataset.v === (notFam ? 'na' : a.recommendation));
-          p.classList.toggle('disabled', notFam && p.dataset.v !== 'na');
-        });
-      } else {
-        var rp2 = document.getElementById('rp-' + url);
-        if (rp2) rp2.querySelectorAll('.ann-pill').forEach(function(p) { p.classList.toggle('active', p.dataset.v === v); });
-      }
-    }
-  }
-  scheduleSave(); updateChips();
-}
-
-// Close dropdown on outside click
-document.addEventListener('click', function() { closeDropdown(); });
-
-// ── Table click delegation (row expand + badge dropdown) ─────────────────────
-document.getElementById('tbody').addEventListener('click', function(e) {
-  // Badge click → dropdown
-  var badge = e.target.closest('.fam-badge, .rec-badge');
-  if (badge) {
-    e.stopPropagation();
-    var btr = badge.closest('tr.data-row');
-    if (!btr) return;
-    openBadgeDropdown(badge, btr.dataset.url, badge.classList.contains('fam-badge') ? 'fam' : 'rec');
-    return;
-  }
-
-  // Link click → navigate, don't expand
-  if (e.target.closest('a')) return;
-
-  // Row click → expand/collapse
-  var tr = e.target.closest('tr.data-row');
-  if (!tr) return;
-  var url = tr.dataset.url;
-  var tab = tabs[activeIdx];
-  if (!tab || !tab.data) return;
-  var c = null;
-  for (var i = 0; i < tab.data.length; i++) {
-    if (tab.data[i].url === url) { c = tab.data[i]; break; }
-  }
-  if (c) toggleExpand(url, tr, c, tab.type);
-});
-
-// ── Save ──────────────────────────────────────────────────────────────────────
-function scheduleSave() {
-  setStatus('Saving…', 'saving');
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(doSave, 600);
-}
+function scheduleSave(){ setStatus('Saving...','saving'); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 600); }
 function doSave() {
-  fetch('/annotations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(ann)
-  })
-  .then(function()  { setStatus('Saved ✓', 'saved'); })
-  .catch(function() { setStatus('Save failed', 'error'); });
+  fetch('/index', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(index) })
+    .then(function(){ setStatus('Saved ✓','saved'); })
+    .catch(function(){ setStatus('Save failed','error'); });
 }
 </script>
 </body>
