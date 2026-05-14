@@ -5,13 +5,11 @@ import http.server, json, os, re, threading, webbrowser
 PORT      = 8765
 BASE      = os.path.dirname(os.path.abspath(__file__))
 HTML_FILE = os.path.join(BASE, 'connections_crm.html')
-ANN_FILE  = os.path.join(BASE, 'connections_annotations.json')
+INDEX_FILE = os.path.join(BASE, 'connections_index.json')
+PROFILES_DIR = os.path.join(BASE, 'profiles')
 
-# Only serve JSON files matching these patterns (no path traversal)
-# Match only files produced by the pipeline skills:
-#   enriched_connections_YYYYMMDD.json  (get-enriched-connections output)
-#   ranked_connections_YYYYMMDD.json    (rank-connections output)
-ALLOWED_RE = re.compile(r'^(enriched_connections|ranked_connections)_\d{8}\.json$')
+RANKED_RE  = re.compile(r'^ranked[\w\-\.]+\.json$')
+HANDLE_RE  = re.compile(r'^[a-zA-Z0-9\-]+$')   # safe profile handle
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -20,31 +18,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ('/', '/index.html'):
             self._file(HTML_FILE, 'text/html')
-        elif self.path == '/annotations':
+
+        elif self.path == '/index':
             data = {}
             try:
-                with open(ANN_FILE, encoding='utf-8') as f:
+                with open(INDEX_FILE, encoding='utf-8') as f:
                     data = json.load(f)
             except Exception:
                 pass
             self._json(data)
+
         elif self.path == '/manifest':
             self._json(self._scan())
+
+        elif self.path.startswith('/profiles/'):
+            handle = self.path[len('/profiles/'):]
+            # Security: allow only safe handles, no path traversal
+            if not HANDLE_RE.match(handle) or '..' in handle:
+                self.send_response(403); self.end_headers(); return
+            self._file(os.path.join(PROFILES_DIR, f'{handle}.json'), 'application/json')
+
         elif self.path.startswith('/data/'):
             fn = self.path[6:]
-            if not ALLOWED_RE.match(fn) or '..' in fn:
+            if not RANKED_RE.match(fn) or '..' in fn:
                 self.send_response(403); self.end_headers(); return
             self._file(os.path.join(BASE, fn), 'application/json')
+
         else:
             self.send_response(404); self.end_headers()
 
     def do_POST(self):
-        if self.path == '/annotations':
+        if self.path == '/index':
             n    = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(n)
             try:
                 data = json.loads(body)
-                with open(ANN_FILE, 'w', encoding='utf-8') as f:
+                with open(INDEX_FILE, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 self._json({'ok': True})
             except Exception as e:
@@ -53,33 +62,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers()
 
     def _scan(self):
-        """Scan folder for enriched/ranked JSON files and return manifest."""
-        network, roles = [], []
+        roles = []
         try:
             for fn in sorted(os.listdir(BASE), reverse=True):
-                if not ALLOWED_RE.match(fn):
+                if not RANKED_RE.match(fn):
                     continue
-                fp  = os.path.join(BASE, fn)
+                fp = os.path.join(BASE, fn)
                 cnt = 0
                 role_name = None
                 try:
                     with open(fp, encoding='utf-8') as f:
                         data = json.load(f)
-                    cnt = len(data) if isinstance(data, list) else 0
-                    if isinstance(data, list) and data and data[0].get('_role_name'):
-                        role_name = data[0]['_role_name']
+                    # New format: { _meta: { roleName }, rankings: [...] }
+                    if isinstance(data, dict) and '_meta' in data:
+                        cnt = len(data.get('rankings', []))
+                        role_name = data['_meta'].get('roleName')
+                    # Legacy format: array with _role_name on each item
+                    elif isinstance(data, list):
+                        cnt = len(data)
+                        if data and data[0].get('_role_name'):
+                            role_name = data[0]['_role_name']
                 except Exception:
                     pass
-                if fn.startswith('enriched'):
-                    date_part = re.sub(r'^enriched[_\-](?:profiles|connections)?[_\-]?', '', fn).replace('.json', '')
-                    network.append({'filename': fn, 'label': 'Network · ' + date_part, 'count': cnt})
-                elif fn.startswith('ranked'):
-                    date_part = re.sub(r'^ranked[_\-]connections[_\-]?', '', fn).replace('.json', '')
-                    label = role_name or ('Role · ' + date_part)
-                    roles.append({'filename': fn, 'label': label, 'count': cnt})
+                date_part = re.sub(r'^ranked[\w]*_?', '', fn).replace('.json', '')
+                label = role_name or ('Role · ' + date_part)
+                roles.append({'filename': fn, 'label': label, 'count': cnt})
         except Exception:
             pass
-        return {'network': network, 'roles': roles}
+        return {'roles': roles}
 
     def _file(self, path, ctype):
         try:
@@ -106,7 +116,7 @@ if __name__ == '__main__':
     srv = http.server.HTTPServer(('localhost', PORT), Handler)
     url = f'http://localhost:{PORT}'
     print(f'Connections CRM running at {url}')
-    print('Drop enriched_*.json or ranked_*.json files here — tabs appear on refresh.')
+    print('Drop ranked_*.json files here — role tabs appear on refresh.')
     print('Press Ctrl+C to stop.')
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
