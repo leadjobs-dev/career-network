@@ -23,7 +23,12 @@ def load_connections(csv_path):
     """Parse LinkedIn Connections.csv. Rows 1-3 are LinkedIn notes; find real header."""
     with open(csv_path, encoding='utf-8') as f:
         lines = f.readlines()
-    header_idx = next(i for i, l in enumerate(lines) if l.startswith('First Name'))
+    header_idx = next(
+        (i for i, l in enumerate(lines) if l.startswith('First Name')),
+        None
+    )
+    if header_idx is None:
+        raise ValueError(f"Could not find 'First Name' header in {csv_path}. Is this a LinkedIn Connections.csv?")
     rows = list(csv.DictReader(lines[header_idx:]))
     for r in rows:
         try:
@@ -118,12 +123,15 @@ def get_location_text(profile):
 # ── Index + profile file builders ─────────────────────────────────────────────
 
 ANNOTATION_KEYS = {'familiarity', 'recommendation', 'notes', 'outreach'}
-_ANNOTATION_DEFAULTS = {
-    'familiarity': 'not_familiar',
-    'recommendation': 'na',
-    'notes': '',
-    'outreach': {'reached_out': False, 'date': '', 'outcome': ''},
-}
+
+
+def _annotation_defaults():
+    return {
+        'familiarity': 'not_familiar',
+        'recommendation': 'na',
+        'notes': '',
+        'outreach': {'reached_out': False, 'date': '', 'outcome': ''},
+    }
 
 
 def build_index_entry(profile, csv_row):
@@ -138,7 +146,7 @@ def build_index_entry(profile, csv_row):
         'currentCompany': company,
         'tenureInRole':  get_tenure_in_role(profile),
         'daysConnected': csv_row.get('_days_connected', 0),
-        **_ANNOTATION_DEFAULTS,
+        **_annotation_defaults(),
     }
 
 
@@ -180,11 +188,13 @@ def merge_index(new_entries, index_path):
     if os.path.exists(index_path):
         with open(index_path, encoding='utf-8') as f:
             existing = json.load(f)
-    elif os.path.exists('connections_annotations.json'):
-        # Migrate old-style annotations file
-        with open('connections_annotations.json', encoding='utf-8') as f:
-            existing = json.load(f)
-        print('Migrating connections_annotations.json → connections_index.json')
+    else:
+        annotations_path = os.path.join(os.path.dirname(os.path.abspath(index_path)), 'connections_annotations.json')
+        if os.path.exists(annotations_path):
+            # Migrate old-style annotations file
+            with open(annotations_path, encoding='utf-8') as f:
+                existing = json.load(f)
+            print('Migrating connections_annotations.json → connections_index.json')
 
     merged = dict(existing)
     for url, new_entry in new_entries.items():
@@ -203,24 +213,27 @@ ACTOR_ID = 'LpVuK3Zozwuipa5bp'
 
 def submit_apify_run(token, profile_urls):
     import requests
-    run = requests.post(
+    resp = requests.post(
         f'https://api.apify.com/v2/acts/{ACTOR_ID}/runs',
         params={'token': token},
         json={
             'profileScraperMode': 'Profile details no email ($4 per 1k)',
             'queries': profile_urls,
         }
-    ).json()
-    return run['data']['id']
+    )
+    resp.raise_for_status()
+    return resp.json()['data']['id']
 
 
 def poll_apify_run(token, run_id):
     import requests
     while True:
-        data = requests.get(
+        resp = requests.get(
             f'https://api.apify.com/v2/actor-runs/{run_id}',
             params={'token': token}
-        ).json()['data']
+        )
+        resp.raise_for_status()
+        data = resp.json()['data']
         status = data['status']
         count = data['stats'].get('outputDatasetItems', '?')
         print(f'  Status: {status} | profiles done: {count}')
@@ -231,10 +244,12 @@ def poll_apify_run(token, run_id):
 
 def download_apify_results(token, dataset_id):
     import requests
-    return requests.get(
+    resp = requests.get(
         f'https://api.apify.com/v2/datasets/{dataset_id}/items',
         params={'token': token, 'format': 'json'}
-    ).json()
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -273,6 +288,10 @@ def main():
     csv_lookup = {r.get('URL', '').strip().rstrip('/'): r for r in rows if r.get('URL', '').strip()}
     profile_urls = [r['URL'].strip() for r in rows if r.get('URL', '').strip()]
     print(f'  {len(profile_urls)} have profile URLs')
+
+    if not profile_urls:
+        print('No LinkedIn URLs found in CSV. Nothing to enrich.')
+        return
 
     # Step 5: Submit to Apify
     print(f'Submitting to Apify...')

@@ -94,6 +94,7 @@ def test_build_index_entry_annotations_default():
     assert entry['familiarity'] == 'not_familiar'
     assert entry['recommendation'] == 'na'
     assert entry['notes'] == ''
+    assert entry['outreach'] == {'reached_out': False, 'date': '', 'outcome': ''}
     assert entry['daysConnected'] == 500
 
 # --- slim_position ---
