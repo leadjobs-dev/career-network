@@ -175,6 +175,9 @@ def cmd_prepare(args):
             missing += 1
             continue
         handle = m.group(1).rstrip('/')
+        if not re.match(r'^[a-zA-Z0-9\-]+$', handle):
+            missing += 1
+            continue
         profile_path = os.path.join(profiles_dir, f'{handle}.json')
         if not os.path.exists(profile_path):
             missing += 1
@@ -185,6 +188,10 @@ def cmd_prepare(args):
 
     if missing:
         print(f'Note: {missing} profiles not found in {profiles_dir}/ (skipped)')
+
+    if not slims:
+        print('WARNING: No candidates passed filters. Check --keywords and --location and try again.')
+        return
 
     # Write batch files
     batch_dir = os.path.join(args.output_dir, '_rank_batches')
@@ -218,9 +225,9 @@ def cmd_merge(args):
         url   = (s.get('url') or '').rstrip('/')
         entry = index.get(url, {})
 
-        req = s.get('requirements_match', 0)
-        sen = s.get('seniority_fit', 0)
-        dom = s.get('domain_fit', 0)
+        req = float(s.get('requirements_match', 0) or 0)
+        sen = float(s.get('seniority_fit', 0) or 0)
+        dom = float(s.get('domain_fit', 0) or 0)
         llm = round((req + sen + dom) / 3, 1)
         rel = relationship_bonus(entry.get('daysConnected', 0))
         mob = mobility_bonus(entry.get('tenureInRole', ''))

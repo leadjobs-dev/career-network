@@ -16,7 +16,7 @@ def test_parse_tenure_years_months_only():
     assert abs(parse_tenure_years('6 mos') - 0.5) < 0.01
 
 def test_parse_tenure_years_long_form():
-    assert parse_tenure_years('2 yrs 4 mos') is not None
+    assert abs(parse_tenure_years('2 yrs 4 mos') - 2.333) < 0.01
 
 def test_parse_tenure_years_empty():
     assert parse_tenure_years('') is None
