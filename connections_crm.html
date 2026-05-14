@@ -758,6 +758,12 @@ function doSave() {
     .then(function(){ setStatus('Saved ✓','saved'); })
     .catch(function(){ setStatus('Save failed','error'); });
 }
+
+function toggleDark() {
+  var html = document.documentElement;
+  var isDark = html.getAttribute('data-theme') === 'dark';
+  html.setAttribute('data-theme', isDark ? '' : 'dark');
+}
 </script>
 </body>
 </html>
