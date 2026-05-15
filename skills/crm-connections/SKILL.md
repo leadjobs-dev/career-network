@@ -1,0 +1,1019 @@
+---
+name: crm-connections
+description: Use when the user wants to open their networking CRM, annotate LinkedIn connections, or track outreach. Triggers on: "open my CRM", "open the ranked connections", "annotate my connections", "update my network", "track outreach". Writes connections_crm.html + crm_server.py once, then runs with: python crm_server.py
+---
+
+# CRM Connections
+
+## Overview
+A local HTML CRM served by a tiny Python server. The Network tab is sourced from `connections_index.json` (the combined display data + annotation store). Role tabs are built automatically from `ranked_*.json` files in the project folder. Expanding a row lazy-fetches full profile data from `profiles/{handle}.json`.
+
+**Files:**
+- `connections_crm.html` — static CRM UI (write once, never regenerate unless upgrading)
+- `crm_server.py` — serves HTML + JSON files on localhost:8765
+- `connections_index.json` — **GOLDEN DATA — NEVER DELETE OR OVERWRITE.** Combined display data + annotation store. Auto-created on first enrichment, updated by the CRM on every annotation change.
+
+---
+
+## Step 0 — Check if files already exist
+
+```python
+import os
+project_dir = r'C:\Users\Taranis\Documents\Projects\LeadJobs Dev\LinkedIn connections scraper'
+has_html   = os.path.exists(os.path.join(project_dir, 'connections_crm.html'))
+has_server = os.path.exists(os.path.join(project_dir, 'crm_server.py'))
+print('HTML:', has_html, '| Server:', has_server)
+```
+
+If both exist → skip to **Step 3** (just run the server).
+If either is missing → run Steps 1 and 2.
+
+---
+
+## Step 1 — Write crm_server.py
+
+Use the **Write tool** to create `crm_server.py` in the project folder:
+
+```
+File: crm_server.py
+Content: (see ## Server Script section at bottom of this skill)
+```
+
+---
+
+## Step 2 — Write connections_crm.html
+
+Use the **Write tool** to create `connections_crm.html` in the project folder:
+
+```
+File: connections_crm.html
+Content: (see ## HTML Template section at bottom of this skill)
+```
+
+---
+
+## Step 3 — Run
+
+```
+python crm_server.py
+```
+
+Opens Chrome at http://localhost:8765 automatically. The Network tab loads from `connections_index.json`. Role tabs appear for every `ranked_*.json` file in the same folder — no regeneration needed. Just drop a new ranked file in the folder and refresh the browser.
+
+---
+
+## Done
+
+Tell the user:
+- CRM running at http://localhost:8765
+- Network tab auto-loads from `connections_index.json`
+- Role tabs auto-discovered from `ranked_*.json` files
+- Drop any new `ranked_connections_YYYYMMDD.json` in the folder → refresh → new role tab appears
+- Annotations auto-save to `connections_index.json` on every change
+- Expanding a row lazy-loads full profile from `profiles/{handle}.json`
+
+---
+
+## How the CRM works
+
+| Feature | How |
+|---|---|
+| **Tabs** | Network tab always present (from index). Role tabs auto-discovered from `ranked_*.json` files. |
+| **Network tab** | Sourced from `connections_index.json` at boot. Columns: name, position, location, familiarity, recommendation |
+| **Role tab** | Loads `ranked_*.json`, merges with index for display. Sorted by fit score. Columns: rank, name, position, score, req., seniority, domain, familiarity, recommendation |
+| Expand a row | Click any row — shows familiarity pills, recommendation pills, score breakdown (role only), notes, outreach. Full profile (positions, about) lazy-fetched from `profiles/{handle}.json` |
+| Filter | Two filter rows: familiarity + recommendation |
+| Search | Live search across name, headline, position |
+| Save | Automatic, 0.6s debounce, POSTs to `/index` endpoint, saves to `connections_index.json` |
+| Tab label | Derived from filename date; override with `_meta.roleName` field in ranked JSON |
+| Dark mode | Toggle via moon button in topbar |
+
+---
+
+## Annotation fields
+
+**Familiarity** — how well do you know this person:
+| Value | Label |
+|---|---|
+| `not_familiar` | Not familiar |
+| `somewhat_familiar` | Somewhat familiar |
+| `worked_together` | Worked together |
+| `very_close` | Very close |
+
+**Recommendation** — would you like to work with them again:
+| Value | Label | Auto-set |
+|---|---|---|
+| `na` | N/A | Default when not_familiar |
+| `neutral` | Neutral | — |
+| `would_work_with` | Would work with | — |
+| `strongly_recommend` | Strongly recommend | — |
+
+---
+
+## Server Script
+
+```python
+#!/usr/bin/env python3
+"""Connections CRM local server. Run: python crm_server.py"""
+import http.server, json, os, re, threading, webbrowser
+
+PORT      = 8765
+BASE      = os.path.dirname(os.path.abspath(__file__))
+HTML_FILE = os.path.join(BASE, 'connections_crm.html')
+INDEX_FILE = os.path.join(BASE, 'connections_index.json')
+PROFILES_DIR = os.path.join(BASE, 'profiles')
+
+RANKED_RE  = re.compile(r'^ranked[\w\-\.]+\.json$')
+HANDLE_RE  = re.compile(r'^[a-zA-Z0-9\-]+$')   # safe profile handle
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+
+    def do_GET(self):
+        if self.path in ('/', '/index.html'):
+            self._file(HTML_FILE, 'text/html')
+
+        elif self.path == '/index':
+            data = {}
+            try:
+                with open(INDEX_FILE, encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+            self._json(data)
+
+        elif self.path == '/manifest':
+            self._json(self._scan())
+
+        elif self.path.startswith('/profiles/'):
+            handle = self.path[len('/profiles/'):]
+            # Security: allow only safe handles, no path traversal
+            if not HANDLE_RE.match(handle) or '..' in handle:
+                self.send_response(403); self.end_headers(); return
+            self._file(os.path.join(PROFILES_DIR, f'{handle}.json'), 'application/json')
+
+        elif self.path.startswith('/data/'):
+            fn = self.path[6:]
+            if not RANKED_RE.match(fn) or '..' in fn:
+                self.send_response(403); self.end_headers(); return
+            self._file(os.path.join(BASE, fn), 'application/json')
+
+        else:
+            self.send_response(404); self.end_headers()
+
+    def do_POST(self):
+        if self.path == '/index':
+            n    = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(n)
+            try:
+                data = json.loads(body)
+                with open(INDEX_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                self._json({'ok': True})
+            except Exception as e:
+                self._json({'error': str(e)})
+        else:
+            self.send_response(404); self.end_headers()
+
+    def _scan(self):
+        roles = []
+        try:
+            for fn in sorted(os.listdir(BASE), reverse=True):
+                if not RANKED_RE.match(fn):
+                    continue
+                fp = os.path.join(BASE, fn)
+                cnt = 0
+                role_name = None
+                try:
+                    with open(fp, encoding='utf-8') as f:
+                        data = json.load(f)
+                    # New format: { _meta: { roleName }, rankings: [...] }
+                    if isinstance(data, dict) and '_meta' in data:
+                        cnt = len(data.get('rankings', []))
+                        role_name = data['_meta'].get('roleName')
+                    # Legacy format: array with _role_name on each item
+                    elif isinstance(data, list):
+                        cnt = len(data)
+                        if data and data[0].get('_role_name'):
+                            role_name = data[0]['_role_name']
+                except Exception:
+                    pass
+                date_part = re.sub(r'^ranked[\w]*_?', '', fn).replace('.json', '')
+                label = role_name or ('Role · ' + date_part)
+                roles.append({'filename': fn, 'label': label, 'count': cnt})
+        except Exception:
+            pass
+        return {'roles': roles}
+
+    def _file(self, path, ctype):
+        try:
+            with open(path, 'rb') as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', ctype + '; charset=utf-8')
+            self.send_header('Content-Length', len(body))
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self.send_response(404); self.end_headers()
+
+    def _json(self, data):
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', len(body))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+if __name__ == '__main__':
+    srv = http.server.HTTPServer(('localhost', PORT), Handler)
+    url = f'http://localhost:{PORT}'
+    print(f'Connections CRM running at {url}')
+    print('Drop ranked_*.json files here — role tabs appear on refresh.')
+    print('Press Ctrl+C to stop.')
+    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        print('\nStopped.')
+```
+
+---
+
+## HTML Template
+
+Write this file as-is to `connections_crm.html`. It is fully static — no placeholders, no injection needed.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Connections CRM</title>
+<style>
+/* ── CSS Variables (light default) ── */
+:root {
+  --bg:          #f8fafc;
+  --surface:     #ffffff;
+  --surface2:    #f8fafc;
+  --border:      #e8ecf0;
+  --border2:     #f1f5f9;
+  --text:        #0f172a;
+  --text2:       #475569;
+  --text3:       #94a3b8;
+  --topbar-bg:   #ffffff;
+  --topbar-border: #e8ecf0;
+  --tab-bg:      transparent;
+  --tab-border:  #e2e8f0;
+  --tab-color:   #64748b;
+  --tab-hover-bg:#f1f5f9;
+  --tab-active-bg:#0f172a;
+  --tab-active-color:#ffffff;
+  --tab-count-bg:#f1f5f9;
+  --tab-count-color:#64748b;
+  --tab-active-count-bg:rgba(255,255,255,0.2);
+  --tab-active-count-color:#fff;
+  --search-bg:   #f1f5f9;
+  --search-border:#e2e8f0;
+  --search-color:#0f172a;
+  --search-ph:   #94a3b8;
+  --filter-bg:   #ffffff;
+  --ftag-bg:     #ffffff;
+  --ftag-border: #e2e8f0;
+  --ftag-color:  #64748b;
+  --ftag-hover-bg:#f8fafc;
+  --th-bg:       #f8fafc;
+  --th-color:    #94a3b8;
+  --th-hover-bg: #f1f5f9;
+  --th-hover-color:#475569;
+  --row-border:  #f1f5f9;
+  --row-hover:   #f8fafc;
+  --row-expand:  #f0f7ff;
+  --expand-bg:   #f8fafc;
+  --expand-border:#e2e8f0;
+  --seg-color:   #94a3b8;
+  --seg-hover:   #f1f5f9;
+  --seg-hover-color:#475569;
+  --pill-bg:     #ffffff;
+  --pill-border: #e2e8f0;
+  --input-bg:    #ffffff;
+  --input-border:#e2e8f0;
+  --input-color: #374151;
+  --dropdown-bg: #ffffff;
+  --dropdown-border:#e5e7eb;
+  --score-val:   #0f172a;
+  --final-score: #0f172a;
+  --rank-color:  #cbd5e1;
+  --chev-color:  #cbd5e1;
+  --save-color:  #94a3b8;
+  --divider:     rgba(0,0,0,0.08);
+}
+[data-theme="dark"] {
+  --bg:          #0f172a;
+  --surface:     #1e293b;
+  --surface2:    #162032;
+  --border:      #334155;
+  --border2:     #253347;
+  --text:        #f1f5f9;
+  --text2:       #94a3b8;
+  --text3:       #475569;
+  --topbar-bg:   #0f172a;
+  --topbar-border:#1e293b;
+  --tab-bg:      transparent;
+  --tab-border:  rgba(255,255,255,0.1);
+  --tab-color:   rgba(255,255,255,0.5);
+  --tab-hover-bg:rgba(255,255,255,0.07);
+  --tab-active-bg:#ffffff;
+  --tab-active-color:#0f172a;
+  --tab-count-bg:rgba(255,255,255,0.12);
+  --tab-count-color:rgba(255,255,255,0.6);
+  --tab-active-count-bg:#e2e8f0;
+  --tab-active-count-color:#334155;
+  --search-bg:   rgba(255,255,255,0.07);
+  --search-border:rgba(255,255,255,0.12);
+  --search-color:#f1f5f9;
+  --search-ph:   rgba(255,255,255,0.3);
+  --filter-bg:   #1e293b;
+  --ftag-bg:     #1e293b;
+  --ftag-border: #334155;
+  --ftag-color:  #64748b;
+  --ftag-hover-bg:#253347;
+  --th-bg:       #162032;
+  --th-color:    #475569;
+  --th-hover-bg: #1e293b;
+  --th-hover-color:#94a3b8;
+  --row-border:  #1e293b;
+  --row-hover:   #1e2d40;
+  --row-expand:  #172338;
+  --expand-bg:   #162032;
+  --expand-border:#334155;
+  --seg-color:   #475569;
+  --seg-hover:   #253347;
+  --seg-hover-color:#94a3b8;
+  --pill-bg:     #253347;
+  --pill-border: #334155;
+  --input-bg:    #253347;
+  --input-border:#334155;
+  --input-color: #e2e8f0;
+  --dropdown-bg: #1e293b;
+  --dropdown-border:#334155;
+  --score-val:   #f1f5f9;
+  --final-score: #f1f5f9;
+  --rank-color:  #334155;
+  --chev-color:  #334155;
+  --save-color:  #475569;
+  --divider:     rgba(255,255,255,0.06);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); }
+
+/* ── Topbar ── */
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--topbar-bg); border-bottom: 1px solid var(--topbar-border);
+  padding: 0 16px; display: flex; align-items: center; gap: 12px;
+  box-shadow: 0 1px 3px var(--divider); min-height: 52px;
+}
+.topbar h1 {
+  font-size: 12px; font-weight: 700; color: var(--text3);
+  flex-shrink: 0; letter-spacing: 0.8px; text-transform: uppercase;
+}
+
+/* ── Tabs ── */
+.tabs { display: flex; gap: 3px; overflow-x: auto; flex: 1; min-width: 0; padding: 8px 0; }
+.tabs::-webkit-scrollbar { height: 0; }
+.tab-btn {
+  padding: 5px 13px; border-radius: 7px;
+  border: 1px solid var(--tab-border); background: var(--tab-bg);
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  white-space: nowrap; transition: all 0.12s; color: var(--tab-color);
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+.tab-btn:hover { background: var(--tab-hover-bg); color: var(--text); }
+.tab-btn.active { background: var(--tab-active-bg); color: var(--tab-active-color); border-color: transparent; font-weight: 600; }
+.tab-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--tab-count-bg); color: var(--tab-count-color); border-radius: 5px;
+  font-size: 10px; padding: 1px 5px; font-weight: 600; min-width: 20px;
+}
+.tab-btn.active .tab-count { background: var(--tab-active-count-bg); color: var(--tab-active-count-color); }
+.tab-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; align-self: center; margin: 0 3px; }
+
+/* ── Dark mode toggle ── */
+.dark-toggle {
+  flex-shrink: 0; width: 32px; height: 32px; border-radius: 8px;
+  border: 1px solid var(--tab-border); background: var(--tab-bg);
+  color: var(--text2); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; font-size: 15px; transition: all 0.12s;
+}
+.dark-toggle:hover { background: var(--tab-hover-bg); color: var(--text); }
+
+.search {
+  flex-shrink: 0; width: 200px;
+  padding: 6px 12px; border: 1px solid var(--search-border); border-radius: 7px;
+  font-size: 13px; background: var(--search-bg); color: var(--search-color);
+}
+.search::placeholder { color: var(--search-ph); }
+.search:focus { outline: none; border-color: #2563eb; }
+.save-status { font-size: 12px; color: var(--save-color); white-space: nowrap; flex-shrink: 0; }
+.save-status.saving { color: #d97706; }
+.save-status.saved  { color: #16a34a; }
+.save-status.error  { color: #dc2626; }
+
+/* ── Filter bars ── */
+.filterbar {
+  position: sticky; top: 52px; z-index: 99;
+  background: var(--filter-bg); border-bottom: 1px solid var(--border);
+  padding: 7px 16px; display: flex; flex-direction: column; gap: 4px;
+}
+.filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.filter-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text3); min-width: 82px; }
+.ftag {
+  padding: 3px 10px; border-radius: 20px; border: 1px solid var(--ftag-border);
+  background: var(--ftag-bg); font-size: 12px; cursor: pointer; white-space: nowrap;
+  transition: all 0.12s; color: var(--ftag-color); font-weight: 500;
+}
+.ftag:hover { background: var(--ftag-hover-bg); color: var(--text); border-color: var(--text3); }
+.ftag.sel { border-color: transparent; color: #fff; font-weight: 600; }
+
+.ftag[data-dim="fam"].sel[data-v="all"]               { background: #334155; }
+.ftag[data-dim="fam"].sel[data-v="not_familiar"]       { background: #6b7280; }
+.ftag[data-dim="fam"].sel[data-v="somewhat_familiar"]  { background: #2563eb; }
+.ftag[data-dim="fam"].sel[data-v="worked_together"]    { background: #7c3aed; }
+.ftag[data-dim="fam"].sel[data-v="very_close"]         { background: #0891b2; }
+.ftag[data-dim="rec"].sel[data-v="all"]                { background: #334155; }
+.ftag[data-dim="rec"].sel[data-v="na"]                  { background: #6b7280; }
+.ftag[data-dim="rec"].sel[data-v="would_not_recommend"] { background: #dc2626; }
+.ftag[data-dim="rec"].sel[data-v="neutral"]             { background: #d97706; }
+.ftag[data-dim="rec"].sel[data-v="would_work_with"]     { background: #16a34a; }
+.ftag[data-dim="rec"].sel[data-v="strongly_recommend"]  { background: #4f46e5; }
+
+.count-chip { display: inline-flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 10px; padding: 0 5px; margin-left: 3px; font-weight: 600; }
+.vis-count { margin-left: auto; font-size: 12px; color: var(--text3); align-self: flex-end; padding-bottom: 2px; }
+
+/* ── Table ── */
+.table-wrap {
+  margin: 14px 16px; border-radius: 10px; overflow: hidden;
+  box-shadow: 0 1px 3px var(--divider); background: var(--surface);
+  border: 1px solid var(--border);
+}
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  text-align: left; padding: 9px 13px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--th-color);
+  border-bottom: 1px solid var(--border2); background: var(--th-bg); white-space: nowrap;
+}
+th.score-col { text-align: center; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--th-hover-color); background: var(--th-hover-bg); }
+th.sort-desc .sort-arrow::after { content: ' ↓'; color: #2563eb; }
+th.sort-asc  .sort-arrow::after { content: ' ↑'; color: #2563eb; }
+tr.data-row { cursor: pointer; border-bottom: 1px solid var(--row-border); transition: background 0.1s; }
+tr.data-row:hover    { background: var(--row-hover); }
+tr.data-row.expanded { background: var(--row-expand); }
+td { padding: 10px 13px; font-size: 13px; vertical-align: middle; }
+
+td.td-rank { font-size: 12px; font-weight: 600; color: var(--rank-color); width: 34px; text-align: center; }
+td.td-name { min-width: 130px; }
+.name-link { font-weight: 600; color: var(--text); text-decoration: none; font-size: 13.5px; }
+.name-link:hover { color: #2563eb; }
+td.td-pos .pos-main { color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-size: 13px; }
+td.td-pos .pos-sub  { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; margin-top: 1px; }
+td.td-score { text-align: center; }
+.score-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 21px; border-radius: 5px; font-size: 12px; font-weight: 700;
+}
+.score-pill.hi  { background: #dcfce7; color: #15803d; }
+.score-pill.mid { background: #fef9c3; color: #a16207; }
+.score-pill.lo  { background: #fee2e2; color: #b91c1c; }
+.final-score { font-size: 15px; font-weight: 800; color: var(--final-score); letter-spacing: -0.3px; }
+
+td.td-loc { font-size: 12px; color: var(--text3); white-space: nowrap; }
+td.td-fam, td.td-rec { white-space: nowrap; }
+td.td-chev { width: 22px; color: var(--chev-color); text-align: center; font-size: 13px; user-select: none; }
+
+/* ── Inline annotation selector ── */
+.ann-seg { display: flex; gap: 2px; align-items: center; }
+.ann-seg-btn {
+  padding: 2px 7px; border-radius: 20px; font-size: 10.5px; font-weight: 500;
+  cursor: pointer; user-select: none; border: 1px solid transparent;
+  color: var(--seg-color); background: transparent; transition: all 0.1s; white-space: nowrap;
+}
+.ann-seg-btn:hover { background: var(--seg-hover); color: var(--seg-hover-color); }
+.ann-seg-btn.active { font-weight: 700; }
+.ann-seg-btn.fam-not_familiar.active      { background: #f3f4f6; color: #6b7280; }
+.ann-seg-btn.fam-somewhat_familiar.active { background: #eff6ff; color: #2563eb; }
+.ann-seg-btn.fam-worked_together.active   { background: #f5f3ff; color: #7c3aed; }
+.ann-seg-btn.fam-very_close.active        { background: #ecfeff; color: #0891b2; }
+.ann-seg-btn.rec-na.active                { background: #f3f4f6; color: #6b7280; }
+.ann-seg-btn.rec-would_not_recommend.active { background: #fee2e2; color: #dc2626; }
+.ann-seg-btn.rec-neutral.active           { background: #fef3c7; color: #d97706; }
+.ann-seg-btn.rec-would_work_with.active   { background: #dcfce7; color: #16a34a; }
+.ann-seg-btn.rec-strongly_recommend.active{ background: #ede9fe; color: #4f46e5; }
+.ann-seg-locked { opacity: 0.22; cursor: default !important; }
+
+/* legacy badges used in expand panel */
+.fam-badge, .rec-badge { display: inline-block; padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; user-select: none; }
+
+/* ── Badge dropdown ── */
+.badge-dropdown {
+  position: fixed; z-index: 2000;
+  background: var(--dropdown-bg); border: 1px solid var(--dropdown-border); border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15); min-width: 175px; padding: 4px 0;
+}
+.bdi { padding: 6px 12px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: var(--text2); transition: background 0.08s; }
+.bdi:hover { background: var(--row-hover); }
+.bdi.bdi-active { font-weight: 700; color: var(--text); }
+.bdi.bdi-locked { opacity: 0.35; cursor: default; }
+.bdi-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.fam-badge.not_familiar      { background: #f3f4f6; color: #6b7280; }
+.fam-badge.somewhat_familiar { background: #eff6ff; color: #2563eb; }
+.fam-badge.worked_together   { background: #f5f3ff; color: #7c3aed; }
+.fam-badge.very_close        { background: #ecfeff; color: #0891b2; }
+.rec-badge.na                 { background: #f3f4f6; color: #6b7280; }
+.rec-badge.would_not_recommend{ background: #fee2e2; color: #dc2626; }
+.rec-badge.neutral            { background: #fef3c7; color: #d97706; }
+.rec-badge.would_work_with    { background: #dcfce7; color: #16a34a; }
+.rec-badge.strongly_recommend { background: #ede9fe; color: #4f46e5; }
+
+/* ── Loading / empty ── */
+.loading-row td { text-align: center; color: var(--text3); font-size: 14px; padding: 60px; }
+.no-results { text-align: center; color: var(--text3); font-size: 14px; padding: 48px; }
+.empty-state { text-align: center; padding: 80px 40px; color: var(--text3); }
+.empty-state h2 { font-size: 18px; color: var(--text2); margin-bottom: 8px; }
+.empty-state p  { font-size: 14px; line-height: 1.8; }
+
+/* ── Expand panel ── */
+tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); background: var(--expand-bg); }
+.expand-panel { padding: 16px 20px 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.ep-col { display: flex; flex-direction: column; gap: 10px; }
+.lbl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text3); }
+.pill-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.ann-pill {
+  padding: 3px 10px; border-radius: 12px; border: 1px solid var(--pill-border);
+  background: var(--pill-bg); font-size: 11px; cursor: pointer; transition: all 0.1s; color: var(--text2);
+}
+.ann-pill:hover { border-color: var(--text3); }
+.ann-pill.active { border-color: transparent; color: #fff; }
+.ann-pill[data-dim="fam"].active[data-v="not_familiar"]       { background: #6b7280; }
+.ann-pill[data-dim="fam"].active[data-v="somewhat_familiar"]  { background: #2563eb; }
+.ann-pill[data-dim="fam"].active[data-v="worked_together"]    { background: #7c3aed; }
+.ann-pill[data-dim="fam"].active[data-v="very_close"]         { background: #0891b2; }
+.ann-pill[data-dim="rec"].active[data-v="na"]                  { background: #6b7280; }
+.ann-pill[data-dim="rec"].active[data-v="would_not_recommend"] { background: #dc2626; }
+.ann-pill[data-dim="rec"].active[data-v="neutral"]             { background: #d97706; }
+.ann-pill[data-dim="rec"].active[data-v="would_work_with"]     { background: #16a34a; }
+.ann-pill[data-dim="rec"].active[data-v="strongly_recommend"]  { background: #4f46e5; }
+.ann-pill.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+
+.notes-box, .outcome-box {
+  width: 100%; border: 1px solid var(--input-border); border-radius: 6px;
+  padding: 6px 8px; font-size: 12px; font-family: inherit;
+  resize: vertical; color: var(--input-color); background: var(--input-bg);
+}
+.notes-box { min-height: 60px; }
+.outcome-box { min-height: 40px; }
+.notes-box:focus, .outcome-box:focus { outline: none; border-color: #2563eb; }
+.outreach-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.outreach-toggle { display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; color: var(--text2); }
+.date-input { padding: 3px 8px; border: 1px solid var(--input-border); border-radius: 5px; font-size: 12px; font-family: inherit; background: var(--input-bg); color: var(--input-color); }
+.score-breakdown { display: flex; gap: 10px; flex-wrap: wrap; }
+.score-item { text-align: center; min-width: 48px; }
+.profile-loading { color: #9ca3af; font-size: 13px; font-style: italic; padding: 8px 0; }
+.score-item .si-val { font-size: 20px; font-weight: 700; color: var(--score-val); }
+.score-item .si-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px; }
+.reason-text { font-size: 12px; color: var(--text2); font-style: italic; line-height: 1.5; }
+.all-pos { font-size: 12px; color: var(--text2); line-height: 1.7; }
+
+/* ── Pagination ── */
+.pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border2); font-size: 13px; }
+.pg-btn { padding: 5px 13px; border-radius: 6px; border: 1px solid var(--ftag-border); background: var(--ftag-bg); color: var(--text2); cursor: pointer; font-size: 13px; }
+.pg-btn:disabled { opacity: 0.35; cursor: default; }
+.pg-btn:not(:disabled):hover { background: var(--row-hover); }
+.pg-info { color: var(--text3); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Connections CRM</h1>
+  <div class="tabs" id="tabs"></div>
+  <input class="search" id="search" type="text" placeholder="Search...">
+  <button class="dark-toggle" id="dark-toggle" onclick="toggleDark()" title="Toggle dark mode">🌙</button>
+  <span class="save-status" id="save-status">Loading...</span>
+</div>
+
+<div class="filterbar">
+  <div class="filter-row">
+    <span class="filter-label">Familiarity</span>
+    <button class="ftag sel" data-dim="fam" data-v="all"               onclick="setFilter('fam','all')">All</button>
+    <button class="ftag"     data-dim="fam" data-v="not_familiar"      onclick="setFilter('fam','not_familiar')">Not familiar</button>
+    <button class="ftag"     data-dim="fam" data-v="somewhat_familiar" onclick="setFilter('fam','somewhat_familiar')">Somewhat familiar</button>
+    <button class="ftag"     data-dim="fam" data-v="worked_together"   onclick="setFilter('fam','worked_together')">Worked together</button>
+    <button class="ftag"     data-dim="fam" data-v="very_close"        onclick="setFilter('fam','very_close')">Very close</button>
+    <span class="vis-count" id="vis-count"></span>
+  </div>
+  <div class="filter-row">
+    <span class="filter-label">Recommendation</span>
+    <button class="ftag sel" data-dim="rec" data-v="all"                 onclick="setFilter('rec','all')">All</button>
+    <button class="ftag"     data-dim="rec" data-v="na"                  onclick="setFilter('rec','na')">N/A</button>
+    <button class="ftag"     data-dim="rec" data-v="would_not_recommend" onclick="setFilter('rec','would_not_recommend')">Would not recommend</button>
+    <button class="ftag"     data-dim="rec" data-v="neutral"             onclick="setFilter('rec','neutral')">Neutral</button>
+    <button class="ftag"     data-dim="rec" data-v="would_work_with"     onclick="setFilter('rec','would_work_with')">Would work with</button>
+    <button class="ftag"     data-dim="rec" data-v="strongly_recommend"  onclick="setFilter('rec','strongly_recommend')">Strongly recommend</button>
+  </div>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead id="thead-row"></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div class="pager" id="pager"></div>
+</div>
+
+<script>
+var FAM_LABELS = { not_familiar: 'Not familiar', somewhat_familiar: 'Somewhat familiar', worked_together: 'Worked together', very_close: 'Very close' };
+var REC_LABELS = { na: 'N/A', neutral: 'Neutral', would_work_with: 'Would work with', strongly_recommend: 'Strongly recommend' };
+var FAM_SHORT  = { not_familiar: 'N/A', somewhat_familiar: 'Some', worked_together: 'Worked', very_close: 'Close' };
+var REC_SHORT  = { na: 'N/A', would_not_recommend: 'No', neutral: 'Maybe', would_work_with: 'Yes', strongly_recommend: '★' };
+
+// ── State ─────────────────────────────────────────────────────────────────────
+var tabs = []; var activeIdx = -1; var index = {}; var saveTimer = null;
+var famFilter = 'all'; var recFilter = 'all'; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
+var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+Promise.all([
+  fetch('/manifest').then(function(r){ return r.json(); }),
+  fetch('/index').then(function(r){ return r.json(); }).catch(function(){ return {}; })
+]).then(function(res) {
+  var manifest = res[0]; index = res[1]; setStatus('','');
+
+  // Always-present "All Connections" tab sourced from index
+  var indexEntries = Object.keys(index).filter(function(k){ return k !== '_meta'; });
+  tabs.push({ type: 'network', label: 'All Connections', count: indexEntries.length, data: null });
+
+  // Role tabs from ranked files
+  (manifest.roles || []).forEach(function(f) {
+    tabs.push({ type: 'role', filename: f.filename, label: f.label, count: f.count, data: null, scoremap: {} });
+  });
+
+  if (tabs.length === 0) {
+    document.getElementById('tbody').innerHTML = '<tr><td colspan="10"><div class="empty-state"><h2>No data</h2><p>Run get-enriched-connections to build connections_index.json</p></div></td></tr>';
+    setStatus('No index file','error'); return;
+  }
+  buildTabs(); activateTab(0);
+}).catch(function(){ setStatus('Server not responding','error'); });
+
+// ── Tab rendering ─────────────────────────────────────────────────────────────
+function buildTabs() {
+  var el = document.getElementById('tabs'); el.innerHTML = ''; var lastType = null;
+  tabs.forEach(function(tab, idx) {
+    if (lastType === 'network' && tab.type === 'role') {
+      var d = document.createElement('div'); d.className = 'tab-divider'; el.appendChild(d);
+    }
+    lastType = tab.type;
+    var btn = document.createElement('button');
+    btn.className = 'tab-btn' + (idx === activeIdx ? ' active' : '');
+    btn.textContent = tab.label;
+    if (tab.count) {
+      var chip = document.createElement('span'); chip.className = 'tab-count'; chip.textContent = tab.count; btn.appendChild(chip);
+    }
+    btn.onclick = (function(i){ return function(){ activateTab(i); }; })(idx);
+    el.appendChild(btn);
+  });
+}
+
+function activateTab(idx) {
+  activeIdx = idx; famFilter = 'all'; recFilter = 'all'; activeSearch = ''; currentPage = 1;
+  document.getElementById('search').value = '';
+  document.querySelectorAll('.ftag').forEach(function(b){ b.classList.toggle('sel', b.dataset.v === 'all'); });
+  buildTabs();
+  var tab = tabs[idx];
+  if (tab.data) { updateHeader(tab.type); renderPage(); return; }
+  if (tab.type === 'network') {
+    // Load All Connections from index
+    tab.data = Object.entries(index)
+      .filter(function(kv){ return kv[0] !== '_meta'; })
+      .map(function(kv){ return normalizeConn(kv[0], kv[1]); });
+    updateHeader('network'); renderPage(); return;
+  }
+  // Role tab — load ranked file
+  document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="10">Loading ' + esc(tab.label) + '...</td></tr>';
+  document.getElementById('pager').innerHTML = ''; setStatus('Loading...','saving');
+  fetch('/data/' + tab.filename).then(function(r){ return r.json(); }).then(function(raw) {
+    var rankings, meta;
+    if (raw._meta && raw.rankings) {
+      // New format
+      rankings = raw.rankings; meta = raw._meta;
+    } else if (Array.isArray(raw)) {
+      // Legacy format (old ranked_connections_*.json arrays)
+      rankings = raw.map(function(r){ return {
+        url: r.url || r.linkedinUrl || '',
+        final_score: r.final_score, llm_score: r.llm_score,
+        requirements_match: r.requirements_match, seniority_fit: r.seniority_fit,
+        domain_fit: r.domain_fit, relationship_bonus: r.relationship_bonus,
+        mobility_bonus: r.mobility_bonus, reason: r.reason,
+      }; });
+      meta = { roleName: raw[0] && raw[0]._role_name };
+    }
+    if (meta && meta.roleName) { tab.label = meta.roleName; buildTabs(); }
+    // Build scoremap
+    tab.scoremap = {};
+    rankings.forEach(function(r){ tab.scoremap[r.url] = r; });
+    // Merge with index for display
+    tab.data = rankings.map(function(r) {
+      var entry = index[r.url] || {};
+      var conn = normalizeConn(r.url, entry);
+      conn.final_score = r.final_score; conn.llm_score = r.llm_score;
+      conn.requirements_match = r.requirements_match; conn.seniority_fit = r.seniority_fit;
+      conn.domain_fit = r.domain_fit; conn.relationship_bonus = r.relationship_bonus;
+      conn.mobility_bonus = r.mobility_bonus; conn.reason = r.reason;
+      return conn;
+    });
+    setStatus('',''); updateHeader('role'); renderPage();
+  }).catch(function(){ setStatus('Failed to load ' + tab.filename,'error'); });
+}
+
+function normalizeConn(url, entry) {
+  return {
+    url: url,
+    _name: ((entry.firstName || '') + ' ' + (entry.lastName || '')).trim() || url,
+    firstName: entry.firstName || '', lastName: entry.lastName || '',
+    headline: entry.headline || '',
+    location: entry.location || '',
+    currentTitle: entry.currentTitle || '',
+    currentCompany: entry.currentCompany || '',
+    tenureInRole: entry.tenureInRole || '',
+    daysConnected: entry.daysConnected || 0,
+  };
+}
+
+// ── Header ────────────────────────────────────────────────────────────────────
+function updateHeader(type) {
+  var t = document.getElementById('thead-row');
+  if (type === 'role') {
+    t.innerHTML = '<tr><th class="score-col">#</th><th>Name</th><th>Position</th><th class="score-col">Score</th><th class="score-col">Req.</th><th class="score-col">Senior.</th><th class="score-col">Domain</th><th>Familiarity</th><th>Recommendation</th><th></th></tr>';
+  } else {
+    t.innerHTML = '<tr><th>Name</th><th>Position</th><th>Location</th><th>Familiarity</th><th>Recommendation</th><th></th></tr>';
+  }
+}
+
+// ── Annotation helpers ────────────────────────────────────────────────────────
+function getAnn(url) {
+  var e = index[url] || {};
+  return {
+    familiarity:    e.familiarity    || 'not_familiar',
+    recommendation: e.recommendation || 'na',
+    notes:          e.notes          || '',
+    outreach:       e.outreach       || { reached_out: false, date: '', outcome: '' },
+  };
+}
+function ensureEntry(url) {
+  if (!index[url]) index[url] = {
+    familiarity: 'not_familiar', recommendation: 'na', notes: '',
+    outreach: { reached_out: false, date: '', outcome: '' }
+  };
+  return index[url];
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function scoreCls(v){ return v >= 7 ? 'hi' : v >= 4 ? 'mid' : 'lo'; }
+function setStatus(msg, cls){ var el = document.getElementById('save-status'); el.textContent = msg; el.className = 'save-status' + (cls ? ' '+cls : ''); }
+function handleFromUrl(url){ var m = (url||'').match(/\/in\/([^/?#]+)/); return m ? m[1] : null; }
+
+// ── Filtering & rendering ─────────────────────────────────────────────────────
+function getFiltered() {
+  var tab = tabs[activeIdx]; if (!tab || !tab.data) return [];
+  var q = activeSearch.toLowerCase();
+  return tab.data.filter(function(c) {
+    var a = getAnn(c.url);
+    if (famFilter !== 'all' && a.familiarity !== famFilter) return false;
+    if (recFilter !== 'all' && a.recommendation !== recFilter) return false;
+    if (!q) return true;
+    var hay = (c._name + ' ' + (c.headline||'') + ' ' + (c.currentTitle||'') + ' ' + (c.currentCompany||'')).toLowerCase();
+    return hay.indexOf(q) !== -1;
+  });
+}
+
+function renderPage() {
+  closeExpand();
+  var tab = tabs[activeIdx]; var filtered = getFiltered(); var total = filtered.length;
+  var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (currentPage > pages) currentPage = 1;
+  var slice = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE);
+  var type = tab ? tab.type : 'network';
+  var tbody = document.getElementById('tbody'); tbody.innerHTML = '';
+  if (total === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" class="no-results">No connections match.</td></tr>';
+  } else {
+    var frag = document.createDocumentFragment();
+    slice.forEach(function(c, idx) {
+      var url = c.url; var a = getAnn(url);
+      var fam = a.familiarity || 'not_familiar'; var rec = a.recommendation || 'na';
+      var tr = document.createElement('tr'); tr.className = 'data-row'; tr.dataset.url = url;
+      var nameCell = url ? '<a class="name-link" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()">'+esc(c._name)+'</a>' : esc(c._name);
+      var pos1 = c.currentTitle && c.currentCompany ? c.currentTitle + ' at ' + c.currentCompany : (c.currentTitle || c.currentCompany || c.headline || '');
+      var pos2 = c.tenureInRole || '';
+      var posCell = (pos1 ? '<div class="pos-main">'+esc(pos1)+'</div>' : '') + (pos2 ? '<div class="pos-sub">'+esc(pos2)+'</div>' : '');
+      var famCell = '<span class="fam-badge '+fam+'">'+FAM_LABELS[fam]+'</span>';
+      var recCell = '<span class="rec-badge '+rec+'">'+REC_LABELS[rec]+'</span>';
+      var cells = '';
+      if (type === 'role') {
+        var rank = (currentPage-1)*PAGE_SIZE+idx+1; var fs = c.final_score||0;
+        var rm = c.requirements_match||0; var sf = c.seniority_fit||0; var df = c.domain_fit||0;
+        cells = '<td class="td-rank">'+rank+'</td><td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
+          '<td class="td-score"><span class="final-score">'+fs.toFixed(1)+'</span></td>'+
+          '<td class="td-score"><span class="score-pill '+scoreCls(rm)+'">'+rm+'</span></td>'+
+          '<td class="td-score"><span class="score-pill '+scoreCls(sf)+'">'+sf+'</span></td>'+
+          '<td class="td-score"><span class="score-pill '+scoreCls(df)+'">'+df+'</span></td>'+
+          '<td class="td-fam">'+famCell+'</td><td class="td-rec">'+recCell+'</td><td class="td-chev">&#8250;</td>';
+      } else {
+        cells = '<td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
+          '<td class="td-loc">'+esc(c.location||'')+'</td>'+
+          '<td class="td-fam">'+famCell+'</td><td class="td-rec">'+recCell+'</td><td class="td-chev">&#8250;</td>';
+      }
+      tr.innerHTML = cells;
+      tr.addEventListener('click', (function(u, row, conn, t){ return function(){ toggleExpand(u, row, conn, t); }; })(url, tr, c, type));
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+  }
+  var pg = document.getElementById('pager');
+  var pages2 = Math.max(1, Math.ceil(total/PAGE_SIZE));
+  pg.innerHTML = pages2 <= 1 ? '' : '<button class="pg-btn" onclick="goPage('+(currentPage-1)+')"'+(currentPage===1?' disabled':'')+'>&#8592; Prev</button><span class="pg-info">Page '+currentPage+' of '+pages2+' &nbsp;&middot;&nbsp; '+total+' shown</span><button class="pg-btn" onclick="goPage('+(currentPage+1)+')"'+(currentPage===pages2?' disabled':'')+'>Next &#8594;</button>';
+  document.getElementById('vis-count').textContent = total + ' of ' + (tab && tab.data ? tab.data.length : 0);
+  updateChips();
+}
+
+function goPage(n){ currentPage = n; renderPage(); window.scrollTo(0,0); }
+
+function updateChips() {
+  var tab = tabs[activeIdx]; var data = tab && tab.data ? tab.data : [];
+  var famC = {}, recC = {};
+  data.forEach(function(c){ var a = getAnn(c.url); famC[a.familiarity||'not_familiar'] = (famC[a.familiarity||'not_familiar']||0)+1; recC[a.recommendation||'na'] = (recC[a.recommendation||'na']||0)+1; });
+  document.querySelectorAll('.ftag[data-dim="fam"][data-v]').forEach(function(btn){
+    var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
+    if (v !== 'all' && famC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = famC[v]; btn.appendChild(ch); }
+  });
+  document.querySelectorAll('.ftag[data-dim="rec"][data-v]').forEach(function(btn){
+    var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
+    if (v !== 'all' && recC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = recC[v]; btn.appendChild(ch); }
+  });
+}
+
+// ── Expand panel ──────────────────────────────────────────────────────────────
+function closeExpand() {
+  if (expandedTr) { expandedTr.remove(); expandedTr = null; }
+  if (expandedDataRow) { expandedDataRow.classList.remove('expanded'); var ch = expandedDataRow.querySelector('.td-chev'); if (ch) ch.textContent = '›'; expandedDataRow = null; }
+  expandedUrl = null;
+}
+
+function toggleExpand(url, tr, c, type) {
+  var wasOpen = (expandedUrl === url); closeExpand(); if (wasOpen) return;
+  expandedUrl = url; expandedDataRow = tr; tr.classList.add('expanded');
+  var chev = tr.querySelector('.td-chev'); if (chev) chev.textContent = '⌄';
+
+  var a = getAnn(url); var fam = a.familiarity || 'not_familiar'; var rec = a.recommendation || 'na';
+  var notFamiliar = (fam === 'not_familiar');
+  var famPills = Object.keys(FAM_LABELS).map(function(v){ return '<button class="ann-pill'+(fam===v?' active':'')+'" data-dim="fam" data-v="'+v+'" onclick="pickAnn(this,event,\''+url+'\',\'fam\')">'+FAM_LABELS[v]+'</button>'; }).join('');
+  var recPills = Object.keys(REC_LABELS).map(function(v){ var dis = (notFamiliar && v !== 'na') ? ' disabled' : ''; return '<button class="ann-pill'+(rec===v?' active':'')+dis+'" data-dim="rec" data-v="'+v+'" onclick="pickAnn(this,event,\''+url+'\',\'rec\')">'+REC_LABELS[v]+'</button>'; }).join('');
+
+  var scoreSection = '';
+  if (type === 'role' && c.final_score != null) {
+    scoreSection = '<div class="lbl">Score breakdown</div><div class="score-breakdown">'+
+      '<div class="score-item"><div class="si-val">'+(c.final_score||0).toFixed(1)+'</div><div class="si-lbl">Final</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.requirements_match||0)+'</div><div class="si-lbl">Req.</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.seniority_fit||0)+'</div><div class="si-lbl">Seniority</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.domain_fit||0)+'</div><div class="si-lbl">Domain</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.relationship_bonus||0)+'</div><div class="si-lbl">Tenure</div></div>'+
+      '<div class="score-item"><div class="si-val">'+(c.mobility_bonus||0)+'</div><div class="si-lbl">Mobility</div></div>'+
+      '</div>'+(c.reason ? '<div class="reason-text">'+esc(c.reason)+'</div>' : '');
+  }
+
+  var colSpan = (type === 'role') ? '10' : '6'; var outreach = a.outreach || {};
+  var xtr = document.createElement('tr'); xtr.className = 'expand-row';
+  xtr.innerHTML = '<td colspan="'+colSpan+'"><div class="expand-panel">'+
+    '<div class="ep-col">'+
+      '<div class="lbl">Familiarity</div><div class="pill-row" id="fp-'+esc(url)+'">'+famPills+'</div>'+
+      '<div class="lbl">Recommendation</div><div class="pill-row" id="rp-'+esc(url)+'">'+recPills+'</div>'+
+      '<div class="lbl">Notes</div><textarea class="notes-box" placeholder="Notes..." oninput="onField(this,\''+url+'\',\'notes\')">'+esc(a.notes||'')+'</textarea>'+
+    '</div>'+
+    '<div class="ep-col" id="profile-col-'+esc(url)+'">'+
+      (scoreSection ? scoreSection+'<div style="margin-top:6px"></div>' : '')+
+      '<div class="profile-loading">Loading profile...</div>'+
+      '<div class="lbl">Outreach</div>'+
+      '<div class="outreach-row"><label class="outreach-toggle"><input type="checkbox"'+(outreach.reached_out?' checked':'')+' onchange="onCheck(this,\''+url+'\')"> Reached out</label>'+
+      '<input type="date" class="date-input" value="'+esc(outreach.date||'')+'" onchange="onDate(this,\''+url+'\')"></div>'+
+      '<textarea class="outcome-box" placeholder="Outcome..." oninput="onField(this,\''+url+'\',\'outcome\')">'+esc(outreach.outcome||'')+'</textarea>'+
+    '</div></div></td>';
+  expandedTr = xtr; tr.insertAdjacentElement('afterend', xtr);
+
+  // Lazy-load profile data
+  var handle = handleFromUrl(url);
+  if (handle) {
+    fetch('/profiles/' + handle).then(function(r){ return r.json(); }).then(function(profile) {
+      renderProfileInPanel(url, profile);
+    }).catch(function() {
+      var col = document.getElementById('profile-col-' + url);
+      if (col) { var pl = col.querySelector('.profile-loading'); if (pl) pl.textContent = 'Profile not available.'; }
+    });
+  }
+}
+
+function renderProfileInPanel(url, profile) {
+  var col = document.getElementById('profile-col-' + url);
+  if (!col) return;
+  var pl = col.querySelector('.profile-loading');
+  if (!pl) return;
+
+  // Build positions list
+  var allPos = [];
+  (profile.currentPosition || []).forEach(function(p) { var s = slimPos(p); if (s) allPos.push(s); });
+  (profile.experience || []).forEach(function(p) { var s = slimPos(p); if (s) allPos.push(s); });
+
+  var html = '';
+  if (allPos.length > 0) {
+    html += '<div class="lbl">Experience</div><div class="all-pos">'+allPos.map(esc).join('<br>')+'</div>';
+  }
+  if (profile.about) {
+    html += '<div class="lbl" style="margin-top:8px">About</div><div class="reason-text">'+esc(profile.about)+'</div>';
+  }
+  if (html) {
+    pl.outerHTML = html;
+  } else {
+    pl.textContent = '';
+  }
+}
+
+function slimPos(p) {
+  if (!p) return null;
+  if (typeof p === 'string') return p.trim() || null;
+  var title = p.title || p.position || '', company = p.companyName || '', dur = p.duration || '';
+  var base = (title && company) ? title+' at '+company : (title || company);
+  return (dur ? base+' ('+dur+')' : base).trim() || null;
+}
+
+// ── Annotation handlers ───────────────────────────────────────────────────────
+function pickAnn(btn, e, url, dim) {
+  e.stopPropagation(); var v = btn.dataset.v; var entry = ensureEntry(url);
+  if (dim === 'fam') {
+    entry.familiarity = v;
+    if (v === 'not_familiar') {
+      entry.recommendation = 'na';
+      var rpr = document.getElementById('rp-'+url);
+      if (rpr) rpr.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.toggle('active', p.dataset.v==='na'); p.classList.toggle('disabled', p.dataset.v!=='na'); });
+      if (expandedDataRow) { var rb = expandedDataRow.querySelector('.rec-badge'); if (rb) { rb.className='rec-badge na'; rb.textContent=REC_LABELS['na']; } }
+    } else {
+      var rpr2 = document.getElementById('rp-'+url);
+      if (rpr2) rpr2.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.remove('disabled'); });
+    }
+    if (expandedDataRow) { var fb = expandedDataRow.querySelector('.fam-badge'); if (fb) { fb.className='fam-badge '+v; fb.textContent=FAM_LABELS[v]; } }
+  } else {
+    entry.recommendation = v;
+    if (expandedDataRow) { var rb2 = expandedDataRow.querySelector('.rec-badge'); if (rb2) { rb2.className='rec-badge '+v; rb2.textContent=REC_LABELS[v]; } }
+  }
+  btn.closest('.pill-row').querySelectorAll('.ann-pill[data-dim="'+dim+'"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
+  scheduleSave(); updateChips();
+}
+
+function onField(el, url, field) {
+  var entry = ensureEntry(url);
+  if (field === 'notes') { entry.notes = el.value; }
+  if (field === 'outcome') { if (!entry.outreach) entry.outreach={}; entry.outreach.outcome = el.value; }
+  scheduleSave();
+}
+function onCheck(el, url) { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.reached_out = el.checked; scheduleSave(); }
+function onDate(el, url)  { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.date = el.value; scheduleSave(); }
+
+function setFilter(dim, v) {
+  if (dim === 'fam') famFilter = v; else recFilter = v; currentPage = 1;
+  document.querySelectorAll('.ftag[data-dim="'+dim+'"]').forEach(function(b){ b.classList.toggle('sel', b.dataset.v===v); }); renderPage();
+}
+
+document.getElementById('search').addEventListener('input', function(e){ activeSearch = e.target.value; currentPage = 1; renderPage(); });
+
+function scheduleSave(){ setStatus('Saving...','saving'); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 600); }
+function doSave() {
+  fetch('/index', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(index) })
+    .then(function(){ setStatus('Saved ✓','saved'); })
+    .catch(function(){ setStatus('Save failed','error'); });
+}
+
+function toggleDark() {
+  var html = document.documentElement;
+  var isDark = html.getAttribute('data-theme') === 'dark';
+  html.setAttribute('data-theme', isDark ? '' : 'dark');
+}
+</script>
+</body>
+</html>
+```
