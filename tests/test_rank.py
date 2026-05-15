@@ -1,5 +1,5 @@
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'rank-connections', 'scripts'))
 from rank_connections import (
     parse_tenure_years, mobility_bonus, relationship_bonus,
     passes_location_filter, passes_keyword_filter, slim_position,

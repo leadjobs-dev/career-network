@@ -10,7 +10,7 @@ Takes the user's LinkedIn Connections.csv, runs Apify enrichment, and produces t
 - `connections_index.json` — lightweight URL-keyed map of all enriched connections (display fields + blank annotation fields). Replaces both the old enriched JSON and annotations files.
 - `profiles/` folder — one JSON file per person with full profile data (loaded only when needed).
 
-**Script:** `scripts/enrich_connections.py` in the project folder.
+**Script:** `skills/get-enriched-connections/scripts/enrich_connections.py` (run from your project root).
 
 ---
 
@@ -52,7 +52,7 @@ Do not proceed until both are confirmed.
 
 ## Step 1 — Count connections and decide path
 
-Read `scripts/enrich_connections.py` to understand the script, then run:
+Read `skills/get-enriched-connections/scripts/enrich_connections.py` to understand the script, then run:
 
 ```python
 import csv
@@ -78,8 +78,7 @@ print(f'Total connections: {len(rows)}')
 ## Step 2 — Run the enrichment script
 
 ```bash
-cd "C:\Users\Taranis\Documents\Projects\LeadJobs Dev\LinkedIn connections scraper"
-python scripts/enrich_connections.py \
+python skills/get-enriched-connections/scripts/enrich_connections.py \
     --csv "PATH_TO_CSV" \
     --token "APIFY_TOKEN" \
     --keywords "KEYWORDS" \

@@ -1,5 +1,5 @@
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'skills', 'get-enriched-connections', 'scripts'))
 from enrich_connections import (
     handle_from_url, score_csv_row, filter_rows,
     get_location_text, get_current_title_company, get_tenure_in_role,

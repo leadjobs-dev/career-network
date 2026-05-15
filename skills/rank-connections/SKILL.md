@@ -8,7 +8,7 @@ description: Use when ranking LinkedIn connections for a specific job opening. T
 ## Overview
 Filters connections from `connections_index.json` by location and job keywords, loads profile files for relevant candidates, scores them inline, and writes `ranked_{slug}_{date}.json` — a slim file with scores and reasons that the CRM auto-discovers as a new role tab.
 
-**Script:** `scripts/rank_connections.py` in the project folder.
+**Script:** `skills/rank-connections/scripts/rank_connections.py` (run from your project root).
 
 **Scoring formula:**
 ```
@@ -45,8 +45,7 @@ Set variables:
 ## Step 2 — Prepare batch files
 
 ```bash
-cd "C:\Users\Taranis\Documents\Projects\LeadJobs Dev\LinkedIn connections scraper"
-python scripts/rank_connections.py prepare \
+python skills/rank-connections/scripts/rank_connections.py prepare \
     --keywords "KEYWORDS" \
     --location "LOCATION"
 ```
@@ -94,7 +93,7 @@ print(f'Scored {len(all_scores)} profiles')
 ## Step 4 — Merge scores and write output
 
 ```bash
-python scripts/rank_connections.py merge \
+python skills/rank-connections/scripts/rank_connections.py merge \
     --scores _scores_tmp.json \
     --role-name "ROLE_NAME" \
     --job-url "JOB_URL"

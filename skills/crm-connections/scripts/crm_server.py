@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Connections CRM local server. Run: python crm_server.py"""
+"""Connections CRM local server. Run from your project root:
+    python skills/crm-connections/scripts/crm_server.py
+Data files (connections_index.json, profiles/, ranked_*.json) are read from
+and written to the current working directory."""
 import http.server, json, os, re, threading, webbrowser
 
-PORT      = 8765
-BASE      = os.path.dirname(os.path.abspath(__file__))
-HTML_FILE = os.path.join(BASE, 'connections_crm.html')
-INDEX_FILE = os.path.join(BASE, 'connections_index.json')
-PROFILES_DIR = os.path.join(BASE, 'profiles')
+PORT         = 8765
+_SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
+HTML_FILE    = os.path.join(_SCRIPT_DIR, '..', 'assets', 'connections_crm.html')
+_CWD         = os.getcwd()
+INDEX_FILE   = os.path.join(_CWD, 'connections_index.json')
+PROFILES_DIR = os.path.join(_CWD, 'profiles')
 
 RANKED_RE  = re.compile(r'^ranked[\w\-\.]+\.json$')
 HANDLE_RE  = re.compile(r'^[a-zA-Z0-9\-]+$')   # safe profile handle
@@ -42,7 +46,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             fn = self.path[6:]
             if not RANKED_RE.match(fn) or '..' in fn:
                 self.send_response(403); self.end_headers(); return
-            self._file(os.path.join(BASE, fn), 'application/json')
+            self._file(os.path.join(_CWD, fn), 'application/json')
 
         else:
             self.send_response(404); self.end_headers()
@@ -64,7 +68,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _scan(self):
         roles = []
         try:
-            for fn in sorted(os.listdir(BASE), reverse=True):
+            for fn in sorted(os.listdir(_CWD), reverse=True):
                 if not RANKED_RE.match(fn):
                     continue
                 fp = os.path.join(BASE, fn)
