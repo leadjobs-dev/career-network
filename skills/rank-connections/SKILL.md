@@ -108,7 +108,8 @@ This computes final scores (llm × 0.80 + relationship × 0.10 + mobility × 0.1
 Tell the user:
 - File saved: `ranked_{slug}_{date}.json`
 - Top 10 from the merge output
-- Refresh the CRM browser — new role tab appears automatically
+
+Then automatically open the CRM: invoke the crm-connections skill.
 
 ## Common Mistakes
 
