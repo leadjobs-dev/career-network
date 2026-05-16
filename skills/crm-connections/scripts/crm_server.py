@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Connections CRM local server. Run from your project root:
     python skills/crm-connections/scripts/crm_server.py
-Data files (connections_index.json, profiles/, ranked_*.json) are read from
-and written to the current working directory."""
+Data files are read from data/ if that folder exists, otherwise from the
+current working directory (backward-compatible with pre-data/ setups)."""
 import http.server, json, os, re, threading, webbrowser
 
-PORT         = 8765
-_SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-HTML_FILE    = os.path.join(_SCRIPT_DIR, '..', 'assets', 'connections_crm.html')
-_CWD         = os.getcwd()
-INDEX_FILE   = os.path.join(_CWD, 'connections_index.json')
-PROFILES_DIR = os.path.join(_CWD, 'profiles')
+PORT        = 8765
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+HTML_FILE   = os.path.join(_SCRIPT_DIR, '..', 'assets', 'connections_crm.html')
+_CWD        = os.getcwd()
+_DATA_DIR   = os.path.join(_CWD, 'data') if os.path.isdir(os.path.join(_CWD, 'data')) else _CWD
+INDEX_FILE   = os.path.join(_DATA_DIR, 'connections_index.json')
+PROFILES_DIR = os.path.join(_DATA_DIR, 'profiles')
 
 RANKED_RE  = re.compile(r'^ranked[\w\-\.]+\.json$')
 HANDLE_RE  = re.compile(r'^[a-zA-Z0-9\-]+$')   # safe profile handle
@@ -46,7 +47,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             fn = self.path[6:]
             if not RANKED_RE.match(fn) or '..' in fn:
                 self.send_response(403); self.end_headers(); return
-            self._file(os.path.join(_CWD, fn), 'application/json')
+            self._file(os.path.join(_DATA_DIR, fn), 'application/json')
 
         else:
             self.send_response(404); self.end_headers()
@@ -68,10 +69,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _scan(self):
         roles = []
         try:
-            for fn in sorted(os.listdir(_CWD), reverse=True):
+            for fn in sorted(os.listdir(_DATA_DIR), reverse=True):
                 if not RANKED_RE.match(fn):
                     continue
-                fp = os.path.join(BASE, fn)
+                fp = os.path.join(_DATA_DIR, fn)
                 cnt = 0
                 role_name = None
                 try:

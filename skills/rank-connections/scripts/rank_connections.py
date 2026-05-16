@@ -285,18 +285,20 @@ def main():
     sub    = parser.add_subparsers(dest='cmd', required=True)
 
     p = sub.add_parser('prepare', help='Filter candidates and create LLM scoring batches')
-    p.add_argument('--index',        default='connections_index.json')
-    p.add_argument('--profiles-dir', default='profiles')
+    _data = 'data' if os.path.isdir('data') else '.'
+    p.add_argument('--index',        default=os.path.join(_data, 'connections_index.json'))
+    p.add_argument('--profiles-dir', default=os.path.join(_data, 'profiles'))
     p.add_argument('--keywords',     default='', help='Comma-separated job keywords')
     p.add_argument('--location',     default='', help='Required location string (empty = remote/any)')
-    p.add_argument('--output-dir',   default='.')
+    p.add_argument('--output-dir',   default=_data)
 
     m = sub.add_parser('merge', help='Merge LLM scores and write ranked output file')
-    m.add_argument('--index',      default='connections_index.json')
+    _data = 'data' if os.path.isdir('data') else '.'
+    m.add_argument('--index',      default=os.path.join(_data, 'connections_index.json'))
     m.add_argument('--scores',     default='_scores_tmp.json')
     m.add_argument('--role-name',  required=True, help='Short label for the CRM tab')
     m.add_argument('--job-url',    default='')
-    m.add_argument('--output-dir', default='.')
+    m.add_argument('--output-dir', default=_data)
 
     args = parser.parse_args()
     if args.cmd == 'prepare':

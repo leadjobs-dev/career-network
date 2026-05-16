@@ -260,7 +260,7 @@ def main():
     parser.add_argument('--token',      required=True,  help='Apify API token')
     parser.add_argument('--keywords',   default='',     help='Comma-separated filter keywords (for >1000 path)')
     parser.add_argument('--job-url',    default='',     help='Job URL — saved to _meta if provided')
-    parser.add_argument('--output-dir', default='.',    help='Directory to write outputs (default: current dir)')
+    parser.add_argument('--output-dir', default='data', help='Directory to write outputs (default: data/)')
     args = parser.parse_args()
 
     keywords = [k.strip() for k in args.keywords.split(',') if k.strip()]
