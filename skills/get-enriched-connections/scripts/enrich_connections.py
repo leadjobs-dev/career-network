@@ -374,7 +374,7 @@ def main():
     print(f'\nDone.')
     print(f'  connections_index.json — {len(new_entries)} new/updated entries')
     print(f'  profiles/              — {len(new_entries)} files written')
-    print(f'\n⚠️  Remember to revoke your Apify token at console.apify.com → Settings → API & Integrations')
+    print(f'\nRemember to revoke your Apify token at console.apify.com -> Settings -> API & Integrations')
 
 
 if __name__ == '__main__':

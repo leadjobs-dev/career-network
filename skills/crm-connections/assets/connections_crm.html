@@ -267,6 +267,11 @@ td.td-chev { width: 22px; color: var(--chev-color); text-align: center; font-siz
 .ann-seg-btn.rec-neutral.active           { background: #fef3c7; color: #d97706; }
 .ann-seg-btn.rec-would_work_with.active   { background: #dcfce7; color: #16a34a; }
 .ann-seg-btn.rec-strongly_recommend.active{ background: #ede9fe; color: #4f46e5; }
+.ann-seg-btn.fit-unset.active     { background: #f3f4f6; color: #6b7280; }
+.ann-seg-btn.fit-strong.active    { background: #ede9fe; color: #4f46e5; }
+.ann-seg-btn.fit-good.active      { background: #dcfce7; color: #16a34a; }
+.ann-seg-btn.fit-weak.active      { background: #fef3c7; color: #d97706; }
+.ann-seg-btn.fit-not_a_fit.active { background: #fee2e2; color: #dc2626; }
 .ann-seg-locked { opacity: 0.22; cursor: default !important; }
 
 /* legacy badges used in expand panel */
@@ -321,6 +326,11 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
 .ann-pill[data-dim="rec"].active[data-v="neutral"]             { background: #d97706; }
 .ann-pill[data-dim="rec"].active[data-v="would_work_with"]     { background: #16a34a; }
 .ann-pill[data-dim="rec"].active[data-v="strongly_recommend"]  { background: #4f46e5; }
+.ann-pill[data-dim="fit"].active[data-v="unset"]     { background: #6b7280; }
+.ann-pill[data-dim="fit"].active[data-v="strong"]    { background: #4f46e5; }
+.ann-pill[data-dim="fit"].active[data-v="good"]      { background: #16a34a; }
+.ann-pill[data-dim="fit"].active[data-v="weak"]      { background: #d97706; }
+.ann-pill[data-dim="fit"].active[data-v="not_a_fit"] { background: #dc2626; }
 .ann-pill.disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 
 .notes-box, .outcome-box {
@@ -391,13 +401,19 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
 
 <script>
 var FAM_LABELS = { not_familiar: 'Not familiar', somewhat_familiar: 'Somewhat familiar', worked_together: 'Worked together', very_close: 'Very close' };
-var REC_LABELS = { na: 'N/A', neutral: 'Neutral', would_work_with: 'Would work with', strongly_recommend: 'Strongly recommend' };
+var REC_LABELS = { na: 'N/A', would_not_recommend: 'Would not recommend', neutral: 'Neutral', would_work_with: 'Would work with', strongly_recommend: 'Strongly recommend' };
 var FAM_SHORT  = { not_familiar: 'N/A', somewhat_familiar: 'Some', worked_together: 'Worked', very_close: 'Close' };
 var REC_SHORT  = { na: 'N/A', would_not_recommend: 'No', neutral: 'Maybe', would_work_with: 'Yes', strongly_recommend: '★' };
+var FIT_LABELS = { unset: 'Not reviewed', strong: 'Strong fit', good: 'Good fit', weak: 'Weak fit', not_a_fit: 'Not a fit' };
+var FIT_SHORT  = { unset: '—', strong: '★', good: '✓', weak: '~', not_a_fit: '✗' };
+var FAM_ORDER  = { very_close: 4, worked_together: 3, somewhat_familiar: 2, not_familiar: 1 };
+var REC_ORDER  = { strongly_recommend: 5, would_work_with: 4, neutral: 3, na: 2, would_not_recommend: 1 };
+var FIT_ORDER  = { strong: 5, good: 4, weak: 3, not_a_fit: 2, unset: 1 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 var tabs = []; var activeIdx = -1; var index = {}; var saveTimer = null;
 var famFilter = 'all'; var recFilter = 'all'; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
+var sortKey = null; var sortDir = 'desc';
 var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -443,7 +459,7 @@ function buildTabs() {
 }
 
 function activateTab(idx) {
-  activeIdx = idx; famFilter = 'all'; recFilter = 'all'; activeSearch = ''; currentPage = 1;
+  activeIdx = idx; famFilter = 'all'; recFilter = 'all'; activeSearch = ''; currentPage = 1; sortKey = null; sortDir = 'desc';
   document.getElementById('search').value = '';
   document.querySelectorAll('.ftag').forEach(function(b){ b.classList.toggle('sel', b.dataset.v === 'all'); });
   buildTabs();
@@ -457,7 +473,7 @@ function activateTab(idx) {
     updateHeader('network'); renderPage(); return;
   }
   // Role tab — load ranked file
-  document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="10">Loading ' + esc(tab.label) + '...</td></tr>';
+  document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="11">Loading ' + esc(tab.label) + '...</td></tr>';
   document.getElementById('pager').innerHTML = ''; setStatus('Loading...','saving');
   fetch('/data/' + tab.filename).then(function(r){ return r.json(); }).then(function(raw) {
     var rankings, meta;
@@ -510,14 +526,48 @@ function normalizeConn(url, entry) {
 // ── Header ────────────────────────────────────────────────────────────────────
 function updateHeader(type) {
   var t = document.getElementById('thead-row');
+  function th(label, key, extraCls) {
+    if (!key) return '<th' + (extraCls ? ' class="'+extraCls+'"' : '') + '>' + label + '</th>';
+    var sorted = sortKey === key;
+    var cls = (extraCls ? extraCls + ' ' : '') + 'sortable' + (sorted ? (sortDir === 'desc' ? ' sort-desc' : ' sort-asc') : '');
+    return '<th class="' + cls + '" onclick="setSort(\'' + key + '\')"><span class="sort-arrow">' + label + '</span></th>';
+  }
   if (type === 'role') {
-    t.innerHTML = '<tr><th class="score-col">#</th><th>Name</th><th>Position</th><th class="score-col">Score</th><th class="score-col">Req.</th><th class="score-col">Senior.</th><th class="score-col">Domain</th><th>Familiarity</th><th>Recommendation</th><th></th></tr>';
+    t.innerHTML = '<tr>' +
+      '<th class="score-col">#</th>' +
+      th('Name', 'name') +
+      '<th>Position</th>' +
+      th('Score', 'score', 'score-col') +
+      th('Req.', 'req', 'score-col') +
+      th('Senior.', 'senior', 'score-col') +
+      th('Domain', 'domain', 'score-col') +
+      th('Role fit', 'fit') +
+      th('Familiarity', 'fam') +
+      th('Recommendation', 'rec') +
+      '<th></th></tr>';
   } else {
-    t.innerHTML = '<tr><th>Name</th><th>Position</th><th>Location</th><th>Familiarity</th><th>Recommendation</th><th></th></tr>';
+    t.innerHTML = '<tr>' +
+      th('Name', 'name') +
+      '<th>Position</th>' +
+      '<th>Location</th>' +
+      th('Familiarity', 'fam') +
+      th('Recommendation', 'rec') +
+      '<th></th></tr>';
   }
 }
 
 // ── Annotation helpers ────────────────────────────────────────────────────────
+function getRoleAnn(url, filename) {
+  var e = index[url] || {};
+  var r = (e.roles && e.roles[filename]) || {};
+  return { fit: r.fit || 'unset', notes: r.notes || '' };
+}
+function ensureRoleEntry(url, filename) {
+  if (!index[url]) index[url] = {};
+  if (!index[url].roles) index[url].roles = {};
+  if (!index[url].roles[filename]) index[url].roles[filename] = { fit: 'unset', notes: '' };
+  return index[url].roles[filename];
+}
 function getAnn(url) {
   var e = index[url] || {};
   return {
@@ -541,11 +591,145 @@ function scoreCls(v){ return v >= 7 ? 'hi' : v >= 4 ? 'mid' : 'lo'; }
 function setStatus(msg, cls){ var el = document.getElementById('save-status'); el.textContent = msg; el.className = 'save-status' + (cls ? ' '+cls : ''); }
 function handleFromUrl(url){ var m = (url||'').match(/\/in\/([^/?#]+)/); return m ? m[1] : null; }
 
+// ── Inline seg builders ───────────────────────────────────────────────────────
+function makeFamSeg(url, fam) {
+  return '<div class="ann-seg">' + Object.keys(FAM_LABELS).map(function(v) {
+    var cls = 'ann-seg-btn' + (fam === v ? ' active fam-'+v : '');
+    return '<button class="'+cls+'" data-url="'+esc(url)+'" data-dim="fam" data-v="'+v+'" onclick="inlinePick(this,event)">'+esc(FAM_SHORT[v])+'</button>';
+  }).join('') + '</div>';
+}
+function makeRecSeg(url, rec, locked) {
+  return '<div class="ann-seg">' + Object.keys(REC_SHORT).map(function(v) {
+    var cls = 'ann-seg-btn' + (rec === v ? ' active rec-'+v : '') + (locked && v !== 'na' ? ' ann-seg-locked' : '');
+    return '<button class="'+cls+'" data-url="'+esc(url)+'" data-dim="rec" data-v="'+v+'" onclick="inlinePick(this,event)">'+esc(REC_SHORT[v])+'</button>';
+  }).join('') + '</div>';
+}
+function makeFitSeg(url, fit, filename) {
+  return '<div class="ann-seg">' + Object.keys(FIT_SHORT).map(function(v) {
+    var cls = 'ann-seg-btn' + (fit === v ? ' active fit-'+v : '');
+    return '<button class="'+cls+'" data-url="'+esc(url)+'" data-v="'+v+'" data-filename="'+esc(filename)+'" onclick="inlineFitPick(this,event)">'+esc(FIT_SHORT[v])+'</button>';
+  }).join('') + '</div>';
+}
+
+function inlineFitPick(btn, e) {
+  e.stopPropagation();
+  var url = btn.dataset.url, v = btn.dataset.v, filename = btn.dataset.filename;
+  var entry = ensureRoleEntry(url, filename);
+  entry.fit = v;
+  btn.closest('.ann-seg').querySelectorAll('button').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.v === v);
+    ['fit-unset','fit-strong','fit-good','fit-weak','fit-not_a_fit'].forEach(function(c){ b.classList.remove(c); });
+    if (b.dataset.v === v) b.classList.add('fit-'+v);
+  });
+  if (expandedUrl === url) {
+    var rfitp = document.getElementById('rfit-'+url);
+    if (rfitp) rfitp.querySelectorAll('.ann-pill[data-dim="fit"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
+  }
+  scheduleSave();
+}
+
+function pickRoleFit(btn, e, url, filename) {
+  e.stopPropagation();
+  var v = btn.dataset.v;
+  var entry = ensureRoleEntry(url, filename);
+  entry.fit = v;
+  btn.closest('.pill-row').querySelectorAll('.ann-pill[data-dim="fit"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
+  if (expandedDataRow) expandedDataRow.querySelectorAll('button[data-filename]').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.v === v);
+    ['fit-unset','fit-strong','fit-good','fit-weak','fit-not_a_fit'].forEach(function(c){ b.classList.remove(c); });
+    if (b.dataset.v === v) b.classList.add('fit-'+v);
+  });
+  scheduleSave();
+}
+
+function onRoleField(el, url, filename) {
+  var entry = ensureRoleEntry(url, filename);
+  entry.notes = el.value;
+  scheduleSave();
+}
+
+function inlinePick(btn, e) {
+  e.stopPropagation();
+  if (btn.classList.contains('ann-seg-locked')) return;
+  var url = btn.dataset.url, dim = btn.dataset.dim, v = btn.dataset.v;
+  var entry = ensureEntry(url);
+  var tr = btn.closest('tr.data-row');
+  if (dim === 'fam') {
+    entry.familiarity = v;
+    btn.closest('.ann-seg').querySelectorAll('.ann-seg-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.v === v);
+      ['fam-not_familiar','fam-somewhat_familiar','fam-worked_together','fam-very_close'].forEach(function(c){ b.classList.remove(c); });
+      if (b.dataset.v === v) b.classList.add('fam-'+v);
+    });
+    if (v === 'not_familiar') {
+      entry.recommendation = 'na';
+      if (tr) tr.querySelectorAll('.ann-seg-btn[data-dim="rec"]').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.v === 'na');
+        ['rec-na','rec-would_not_recommend','rec-neutral','rec-would_work_with','rec-strongly_recommend'].forEach(function(c){ b.classList.remove(c); });
+        if (b.dataset.v === 'na') b.classList.add('rec-na');
+        b.classList.toggle('ann-seg-locked', b.dataset.v !== 'na');
+      });
+      if (expandedUrl === url) {
+        var rp = document.getElementById('rp-'+url);
+        if (rp) rp.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.toggle('active', p.dataset.v==='na'); p.classList.toggle('disabled', p.dataset.v!=='na'); });
+      }
+    } else {
+      if (tr) tr.querySelectorAll('.ann-seg-btn[data-dim="rec"]').forEach(function(b){ b.classList.remove('ann-seg-locked'); });
+      if (expandedUrl === url) {
+        var rp2 = document.getElementById('rp-'+url);
+        if (rp2) rp2.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.remove('disabled'); });
+      }
+    }
+    if (expandedUrl === url) {
+      var fp = document.getElementById('fp-'+url);
+      if (fp) fp.querySelectorAll('.ann-pill[data-dim="fam"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
+    }
+  } else {
+    entry.recommendation = v;
+    btn.closest('.ann-seg').querySelectorAll('.ann-seg-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.v === v);
+      ['rec-na','rec-would_not_recommend','rec-neutral','rec-would_work_with','rec-strongly_recommend'].forEach(function(c){ b.classList.remove(c); });
+      if (b.dataset.v === v) b.classList.add('rec-'+v);
+    });
+    if (expandedUrl === url) {
+      var rp3 = document.getElementById('rp-'+url);
+      if (rp3) rp3.querySelectorAll('.ann-pill[data-dim="rec"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
+    }
+  }
+  scheduleSave(); updateChips();
+}
+
+// ── Sort ──────────────────────────────────────────────────────────────────────
+function setSort(key) {
+  if (sortKey === key) {
+    sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+  } else {
+    sortKey = key;
+    sortDir = (key === 'name') ? 'asc' : 'desc';
+  }
+  currentPage = 1;
+  var tab = tabs[activeIdx]; if (tab) updateHeader(tab.type);
+  renderPage();
+}
+
+function getSortVal(c, key) {
+  var tab = tabs[activeIdx];
+  if (key === 'score')  return c.final_score || 0;
+  if (key === 'req')    return c.requirements_match || 0;
+  if (key === 'senior') return c.seniority_fit || 0;
+  if (key === 'domain') return c.domain_fit || 0;
+  if (key === 'name')   return (c._name || '').toLowerCase();
+  if (key === 'fit')    return FIT_ORDER[getRoleAnn(c.url, tab && tab.filename).fit] || 0;
+  if (key === 'fam')    return FAM_ORDER[getAnn(c.url).familiarity || 'not_familiar'] || 0;
+  if (key === 'rec')    return REC_ORDER[getAnn(c.url).recommendation || 'na'] || 0;
+  return 0;
+}
+
 // ── Filtering & rendering ─────────────────────────────────────────────────────
 function getFiltered() {
   var tab = tabs[activeIdx]; if (!tab || !tab.data) return [];
   var q = activeSearch.toLowerCase();
-  return tab.data.filter(function(c) {
+  var results = tab.data.filter(function(c) {
     var a = getAnn(c.url);
     if (famFilter !== 'all' && a.familiarity !== famFilter) return false;
     if (recFilter !== 'all' && a.recommendation !== recFilter) return false;
@@ -553,20 +737,31 @@ function getFiltered() {
     var hay = (c._name + ' ' + (c.headline||'') + ' ' + (c.currentTitle||'') + ' ' + (c.currentCompany||'')).toLowerCase();
     return hay.indexOf(q) !== -1;
   });
+  if (sortKey) {
+    var dir = sortDir === 'asc' ? 1 : -1;
+    results.sort(function(a, b) {
+      var av = getSortVal(a, sortKey), bv = getSortVal(b, sortKey);
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+  }
+  return results;
 }
 
 function renderPage() {
   closeExpand();
-  var tab = tabs[activeIdx]; var filtered = getFiltered(); var total = filtered.length;
+  var tab = tabs[activeIdx]; if (tab) updateHeader(tab.type);
+  var filtered = getFiltered(); var total = filtered.length;
   var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (currentPage > pages) currentPage = 1;
   var slice = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE);
   var type = tab ? tab.type : 'network';
   var tbody = document.getElementById('tbody'); tbody.innerHTML = '';
+  var colCount = (type === 'role') ? 11 : 6;
   if (total === 0) {
-    tbody.innerHTML = '<tr><td colspan="10" class="no-results">No connections match.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="'+colCount+'" class="no-results">No connections match.</td></tr>';
   } else {
     var frag = document.createDocumentFragment();
+    var roleFilename = (type === 'role') ? tabs[activeIdx].filename : null;
     slice.forEach(function(c, idx) {
       var url = c.url; var a = getAnn(url);
       var fam = a.familiarity || 'not_familiar'; var rec = a.recommendation || 'na';
@@ -575,17 +770,19 @@ function renderPage() {
       var pos1 = c.currentTitle && c.currentCompany ? c.currentTitle + ' at ' + c.currentCompany : (c.currentTitle || c.currentCompany || c.headline || '');
       var pos2 = c.tenureInRole || '';
       var posCell = (pos1 ? '<div class="pos-main">'+esc(pos1)+'</div>' : '') + (pos2 ? '<div class="pos-sub">'+esc(pos2)+'</div>' : '');
-      var famCell = '<span class="fam-badge '+fam+'">'+FAM_LABELS[fam]+'</span>';
-      var recCell = '<span class="rec-badge '+rec+'">'+REC_LABELS[rec]+'</span>';
+      var famCell = makeFamSeg(url, fam);
+      var recCell = makeRecSeg(url, rec, fam === 'not_familiar');
       var cells = '';
       if (type === 'role') {
         var rank = (currentPage-1)*PAGE_SIZE+idx+1; var fs = c.final_score||0;
         var rm = c.requirements_match||0; var sf = c.seniority_fit||0; var df = c.domain_fit||0;
+        var ra = getRoleAnn(url, roleFilename); var fitCell = makeFitSeg(url, ra.fit, roleFilename);
         cells = '<td class="td-rank">'+rank+'</td><td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
           '<td class="td-score"><span class="final-score">'+fs.toFixed(1)+'</span></td>'+
           '<td class="td-score"><span class="score-pill '+scoreCls(rm)+'">'+rm+'</span></td>'+
           '<td class="td-score"><span class="score-pill '+scoreCls(sf)+'">'+sf+'</span></td>'+
           '<td class="td-score"><span class="score-pill '+scoreCls(df)+'">'+df+'</span></td>'+
+          '<td class="td-fit">'+fitCell+'</td>'+
           '<td class="td-fam">'+famCell+'</td><td class="td-rec">'+recCell+'</td><td class="td-chev">&#8250;</td>';
       } else {
         cells = '<td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
@@ -637,6 +834,9 @@ function toggleExpand(url, tr, c, type) {
   var notFamiliar = (fam === 'not_familiar');
   var famPills = Object.keys(FAM_LABELS).map(function(v){ return '<button class="ann-pill'+(fam===v?' active':'')+'" data-dim="fam" data-v="'+v+'" onclick="pickAnn(this,event,\''+url+'\',\'fam\')">'+FAM_LABELS[v]+'</button>'; }).join('');
   var recPills = Object.keys(REC_LABELS).map(function(v){ var dis = (notFamiliar && v !== 'na') ? ' disabled' : ''; return '<button class="ann-pill'+(rec===v?' active':'')+dis+'" data-dim="rec" data-v="'+v+'" onclick="pickAnn(this,event,\''+url+'\',\'rec\')">'+REC_LABELS[v]+'</button>'; }).join('');
+  var roleFilename = (type === 'role') ? tabs[activeIdx].filename : null;
+  var ra = roleFilename ? getRoleAnn(url, roleFilename) : { fit: 'unset', notes: '' };
+  var fitPills = roleFilename ? Object.keys(FIT_LABELS).map(function(v){ return '<button class="ann-pill'+(ra.fit===v?' active':'')+'" data-dim="fit" data-v="'+v+'" onclick="pickRoleFit(this,event,\''+url+'\',\''+esc(roleFilename)+'\')">'+FIT_LABELS[v]+'</button>'; }).join('') : '';
 
   var scoreSection = '';
   if (type === 'role' && c.final_score != null) {
@@ -650,13 +850,14 @@ function toggleExpand(url, tr, c, type) {
       '</div>'+(c.reason ? '<div class="reason-text">'+esc(c.reason)+'</div>' : '');
   }
 
-  var colSpan = (type === 'role') ? '10' : '6'; var outreach = a.outreach || {};
+  var colSpan = (type === 'role') ? '11' : '6'; var outreach = a.outreach || {};
   var xtr = document.createElement('tr'); xtr.className = 'expand-row';
   xtr.innerHTML = '<td colspan="'+colSpan+'"><div class="expand-panel">'+
     '<div class="ep-col">'+
       '<div class="lbl">Familiarity</div><div class="pill-row" id="fp-'+esc(url)+'">'+famPills+'</div>'+
       '<div class="lbl">Recommendation</div><div class="pill-row" id="rp-'+esc(url)+'">'+recPills+'</div>'+
       '<div class="lbl">Notes</div><textarea class="notes-box" placeholder="Notes..." oninput="onField(this,\''+url+'\',\'notes\')">'+esc(a.notes||'')+'</textarea>'+
+      (roleFilename ? '<div class="lbl" style="margin-top:6px">Role fit</div><div class="pill-row" id="rfit-'+esc(url)+'">'+fitPills+'</div><div class="lbl">Role notes</div><textarea class="notes-box" placeholder="Notes specific to this role..." oninput="onRoleField(this,\''+url+'\',\''+esc(roleFilename)+'\')">'+esc(ra.notes||'')+'</textarea>' : '')+
     '</div>'+
     '<div class="ep-col" id="profile-col-'+esc(url)+'">'+
       (scoreSection ? scoreSection+'<div style="margin-top:6px"></div>' : '')+
@@ -722,15 +923,29 @@ function pickAnn(btn, e, url, dim) {
       entry.recommendation = 'na';
       var rpr = document.getElementById('rp-'+url);
       if (rpr) rpr.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.toggle('active', p.dataset.v==='na'); p.classList.toggle('disabled', p.dataset.v!=='na'); });
-      if (expandedDataRow) { var rb = expandedDataRow.querySelector('.rec-badge'); if (rb) { rb.className='rec-badge na'; rb.textContent=REC_LABELS['na']; } }
+      if (expandedDataRow) expandedDataRow.querySelectorAll('.ann-seg-btn[data-dim="rec"]').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.v === 'na');
+        ['rec-na','rec-would_not_recommend','rec-neutral','rec-would_work_with','rec-strongly_recommend'].forEach(function(c){ b.classList.remove(c); });
+        if (b.dataset.v === 'na') b.classList.add('rec-na');
+        b.classList.toggle('ann-seg-locked', b.dataset.v !== 'na');
+      });
     } else {
       var rpr2 = document.getElementById('rp-'+url);
       if (rpr2) rpr2.querySelectorAll('.ann-pill').forEach(function(p){ p.classList.remove('disabled'); });
+      if (expandedDataRow) expandedDataRow.querySelectorAll('.ann-seg-btn[data-dim="rec"]').forEach(function(b){ b.classList.remove('ann-seg-locked'); });
     }
-    if (expandedDataRow) { var fb = expandedDataRow.querySelector('.fam-badge'); if (fb) { fb.className='fam-badge '+v; fb.textContent=FAM_LABELS[v]; } }
+    if (expandedDataRow) expandedDataRow.querySelectorAll('.ann-seg-btn[data-dim="fam"]').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.v === v);
+      ['fam-not_familiar','fam-somewhat_familiar','fam-worked_together','fam-very_close'].forEach(function(c){ b.classList.remove(c); });
+      if (b.dataset.v === v) b.classList.add('fam-'+v);
+    });
   } else {
     entry.recommendation = v;
-    if (expandedDataRow) { var rb2 = expandedDataRow.querySelector('.rec-badge'); if (rb2) { rb2.className='rec-badge '+v; rb2.textContent=REC_LABELS[v]; } }
+    if (expandedDataRow) expandedDataRow.querySelectorAll('.ann-seg-btn[data-dim="rec"]').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.v === v);
+      ['rec-na','rec-would_not_recommend','rec-neutral','rec-would_work_with','rec-strongly_recommend'].forEach(function(c){ b.classList.remove(c); });
+      if (b.dataset.v === v) b.classList.add('rec-'+v);
+    });
   }
   btn.closest('.pill-row').querySelectorAll('.ann-pill[data-dim="'+dim+'"]').forEach(function(p){ p.classList.toggle('active', p.dataset.v===v); });
   scheduleSave(); updateChips();
