@@ -20,9 +20,19 @@ final_score = llm_score × 0.80 + relationship_bonus × 0.10 + mobility_bonus ×
 
 ---
 
-## Step 0 — Get inputs
+## Step 0 — Check enrichment, then get inputs
 
-1. **Job URL** — check `connections_index.json` for `_meta.jobUrl`. If present and non-empty, use it (it was captured during enrichment). Otherwise ask the user.
+**Before scoring, verify relevant connections are enriched for this role type.**
+
+Fetch the job description (or ask for the URL if not already provided). Identify the role domain (engineering, marketing, sales, design, etc.). Then ask the user:
+
+> "Have connections in the [domain] space been enriched? If this is a new role type from your previous runs, some relevant people may be missing from the index."
+
+If the user is unsure or says no — invoke get-enriched-connections first. Only proceed with ranking once enrichment is confirmed for this role domain.
+
+Once confirmed:
+
+1. **Job URL** — check `connections_index.json` for `_meta.jobUrl`. If present and non-empty, use it. Otherwise use the URL from the conversation.
 2. **Role name** — always ask: short label for the CRM tab (e.g. `"Senior Backend Engineer @ Stripe"`)
 
 ---

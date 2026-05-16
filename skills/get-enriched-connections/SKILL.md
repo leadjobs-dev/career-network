@@ -28,7 +28,7 @@ Store as `JOB_URL`.
 
 ### 0b. Connections.csv
 
-Give the user these export instructions, then **STOP AND WAIT** — do not proceed to Step 0c until the user explicitly confirms they have `Connections.csv` and provides the path to it:
+Give the user these export instructions, then **STOP AND WAIT** — do not proceed to Step 1 until the user explicitly confirms they have `Connections.csv` and provides the path to it:
 
 ---
 **How to export your LinkedIn connections:**
@@ -44,9 +44,74 @@ Only `Connections.csv` is needed from the ZIP.
 
 **Wait here. Do not move on until the user confirms they have the file and tells you where it is.**
 
-### 0c. Apify token
+---
 
-Explain what Apify is and ask the user to paste their token:
+## Step 1 — Fetch job description and extract keywords
+
+Use WebFetch on `JOB_URL`. Extract:
+- Job title + synonyms
+- Required skills / tech stack
+- Seniority level
+- Location (city/country, or remote)
+- Company name
+
+Set:
+- `KEYWORDS` = broad comma-separated keywords covering the role domain (e.g. for marketing: `product marketing,marketing,marketer,gtm,brand,growth,content,demand generation,communications,pr,cmo`)
+- `LOCATION` = city or country name, or `""` for remote
+
+**Err on the side of broad keywords** — better to enrich extra people than miss relevant ones.
+
+---
+
+## Step 2 — Preview: count and sample matching connections
+
+Before asking for an Apify token, show the user exactly how many connections would be submitted. Run this Python snippet:
+
+```python
+import csv, json, os
+
+keywords = [kw.strip().lower() for kw in KEYWORDS.split(',') if kw.strip()]
+
+with open(CSV_PATH, encoding='utf-8') as f:
+    lines = f.readlines()
+header_idx = next(i for i, l in enumerate(lines) if l.startswith('First Name'))
+rows = list(csv.DictReader(lines[header_idx:]))
+
+already_urls = set()
+if os.path.exists('data/connections_index.json'):
+    with open('data/connections_index.json', encoding='utf-8') as f:
+        already_urls = set(json.load(f).keys())
+
+new_matching = []
+for row in rows:
+    position = (row.get('Position') or '').lower()
+    company = (row.get('Company') or '').lower()
+    combined = position + ' ' + company
+    url = row.get('URL', '')
+    if url in already_urls:
+        continue
+    if not keywords or any(kw in combined for kw in keywords):
+        new_matching.append(row)
+
+print(f'New connections to enrich: {len(new_matching)}')
+print('Sample (first 15):')
+for r in new_matching[:15]:
+    name = f"{r.get('First Name', '')} {r.get('Last Name', '')}".encode('ascii', 'replace').decode()
+    pos = (r.get('Position') or '').encode('ascii', 'replace').decode()
+    print(f'  {name} -- {pos}')
+```
+
+Show the count and sample to the user, then ask:
+- If count > 1,000: warn that this exceeds Apify's free tier (~$4 per 1,000). Ask if they want to narrow keywords or accept the cost.
+- If count ≤ 1,000: confirm and ask them to proceed.
+
+**Do not ask for the Apify token until the user confirms they're happy with the scope.**
+
+---
+
+## Step 3 — Get Apify token and run enrichment
+
+Ask the user to paste their Apify token:
 
 ---
 **What is Apify and why do we need it?**
@@ -68,44 +133,7 @@ LinkedIn doesn't let you download your connections' full profile data directly. 
 
 ---
 
----
-
-## Step 1 — Count connections and decide path
-
-Check how many connections are in the CSV and how many are already enriched:
-
-```python
-import csv, json, os
-with open(CSV_PATH, encoding='utf-8') as f:
-    lines = f.readlines()
-header_idx = next(i for i, l in enumerate(lines) if l.startswith('First Name'))
-rows = list(csv.DictReader(lines[header_idx:]))
-total = len(rows)
-
-already = 0
-if os.path.exists('data/connections_index.json'):
-    with open('data/connections_index.json', encoding='utf-8') as f:
-        already = len(json.load(f))
-
-print(f'Total connections: {total}')
-print(f'Already enriched:  {already}')
-print(f'New to enrich:     {total - already} (before keyword filter)')
-```
-
-**If already enriched ≥ total:** Nothing to do — all connections are in the index. Skip to Done.
-
-**Decide on keywords:**
-
-- **New to enrich ≤ 1000:** No keywords needed. Set `KEYWORDS = ""`.
-- **New to enrich > 1000:** Need keywords to stay within Apify budget.
-  - Tell the user: *"You have N new connections to enrich. To stay within Apify's free tier (~1000 profiles per run), I'll filter by job title keywords from the job posting."*
-  - Use WebFetch on `JOB_URL` to extract a broad list of title/skill keywords (e.g. for an engineering role: `engineer,developer,software,backend,frontend,fullstack,tech lead,cto,vp engineering,architect,data,devops,platform,product`)
-  - Set `KEYWORDS = "comma,separated,keywords"`
-  - Note: **err on the side of broad keywords** — it's better to enrich extra people than miss relevant ones
-
----
-
-## Step 2 — Run the enrichment script
+Then run:
 
 ```bash
 python skills/get-enriched-connections/scripts/enrich_connections.py \
@@ -139,8 +167,10 @@ After the user confirms (or says they'll handle it), **automatically continue to
 
 | Mistake | Fix |
 |---------|-----|
-| Proceeding to Apify before user has Connections.csv | **Always wait** for the user to confirm they have the file before moving to Step 0c |
+| Asking for Apify token before showing the preview count | Always run Step 2 first — user should know the scope before committing |
+| Proceeding to Apify before user has Connections.csv | **Always wait** for the user to confirm they have the file before moving to Step 1 |
 | `UnicodeDecodeError` on CSV | Script uses `encoding='utf-8'` — should be fine. If not, open the CSV in Notepad and save as UTF-8. |
+| Using `.encode('ascii', 'replace')` only on final print | Apply it per field, not on the whole formatted string |
 | CSV rows 1–3 are LinkedIn notes | Script handles this — finds real header by scanning for `First Name` |
 | New to enrich > 1000 but no keywords | Script falls back to taking oldest 1000 new profiles. Always provide keywords for large networks. |
 | Apify returns fewer profiles than submitted | Normal — LinkedIn blocks some. Script notes the count and continues. |
