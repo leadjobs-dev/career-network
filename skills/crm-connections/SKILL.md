@@ -42,19 +42,21 @@ Tell the user:
 |---|---|
 | **Tabs** | Network tab always present (from index). Role tabs auto-discovered from `ranked_*.json` files. |
 | **Network tab** | Sourced from `connections_index.json` at boot. Columns: name, position, location, familiarity, recommendation |
-| **Role tab** | Loads `ranked_*.json`, merges with index for display. Sorted by fit score. Columns: rank, name, position, score, req., seniority, domain, familiarity, recommendation |
-| Expand a row | Click any row — shows familiarity pills, recommendation pills, score breakdown (role only), notes, outreach. Full profile (positions, about) lazy-fetched from `profiles/{handle}.json` |
-| Filter | Two filter rows: familiarity + recommendation |
-| Search | Live search across name, headline, position |
-| Save | Automatic, 0.6s debounce, POSTs to `/index` endpoint, saves to `connections_index.json` |
-| Tab label | Derived from filename date; override with `_meta.roleName` field in ranked JSON |
-| Dark mode | Toggle via moon button in topbar |
+| **Role tab** | Loads `ranked_*.json`, merges with index for display. Columns: rank, name, position, score, req., seniority, domain, role fit, familiarity, recommendation |
+| **Sorting** | Click any column header to sort. First click = highest first for scores and categorical fields (fit, familiarity, recommendation); A→Z for name. Click again to reverse. |
+| **Inline editing** | Familiarity, recommendation, and role fit can be set directly in the table row without expanding |
+| **Expand a row** | Click any row — shows full annotation pills, score breakdown (role tabs), notes, role notes, outreach tracking. Profile (positions, about) lazy-fetched from `profiles/{handle}.json` |
+| **Filter** | Two filter rows: familiarity + recommendation |
+| **Search** | Live search across name, headline, position |
+| **Save** | Automatic, 0.6s debounce, POSTs to `/index` endpoint, saves to `connections_index.json` |
+| **Tab label** | Derived from `_meta.roleName` in ranked JSON, falls back to filename date |
+| **Dark mode** | Toggle via moon button in topbar |
 
 ---
 
 ## Annotation fields
 
-**Familiarity** — how well do you know this person:
+**Familiarity** — how well do you know this person (global, across all roles):
 | Value | Label |
 |---|---|
 | `not_familiar` | Not familiar |
@@ -62,11 +64,20 @@ Tell the user:
 | `worked_together` | Worked together |
 | `very_close` | Very close |
 
-**Recommendation** — would you like to work with them again:
-| Value | Label | Auto-set |
-|---|---|---|
-| `na` | N/A | Default when not_familiar |
-| `neutral` | Neutral | — |
-| `would_work_with` | Would work with | — |
-| `strongly_recommend` | Strongly recommend | — |
-| `would_not_recommend` | Would not recommend | — |
+**Recommendation** — would you work with them again (global, across all roles):
+| Value | Label |
+|---|---|
+| `na` | N/A (default when not familiar) |
+| `neutral` | Neutral |
+| `would_work_with` | Would work with |
+| `strongly_recommend` | Strongly recommend |
+| `would_not_recommend` | Would not recommend |
+
+**Role fit** — is this person a fit for this specific role (per-role, stored under `index[url].roles[filename]`):
+| Value | Label |
+|---|---|
+| `unset` | Not reviewed |
+| `strong` | Strong fit |
+| `good` | Good fit |
+| `weak` | Weak fit |
+| `not_a_fit` | Not a fit |

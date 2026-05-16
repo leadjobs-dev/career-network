@@ -1,115 +1,130 @@
 # career-network
 
-A self-service system for maintaining your professional network — enrich LinkedIn connections, rank them for specific job openings, and track outreach through a local CRM.
+A private system for turning your LinkedIn connections into a ranked, searchable, annotated network — so you can answer "who should I reach out to about this job?" in minutes instead of hours.
 
-Useful for both **finding a job** (who in your network can refer you?) and **referring others** (who is the best fit for an open role?).
+**What you'll have at the end:** A local web app showing your connections ranked by fit for any job opening, with scores for requirements match, seniority, and domain. You can mark familiarity, leave notes, track outreach, and flag per-role fit — all saved privately on your machine.
+
+Works for **finding a job** (who in your network can refer you?) and **referring others** (who is the best match for an open role?).
 
 ---
 
 ## How it works
 
-Three Claude skills form a pipeline:
+Three skills form a pipeline — you trigger each one by describing what you want in Claude Code:
 
-| Step | Skill | What it does |
-|------|-------|-------------|
-| 1 | `get-enriched-connections` | Exports Connections.csv, enriches profiles via Apify, writes local database |
-| 2 | `rank-connections` | Scores your network for a specific job using Claude's reasoning |
-| 3 | `crm-connections` | Opens a local web CRM to annotate connections and track outreach |
+| Step | What you say | What happens |
+|------|-------------|-------------|
+| 1 | "Enrich my connections" | Claude walks you through exporting your LinkedIn data, enriches profiles via Apify, and builds a local database |
+| 2 | "Rank my connections for this job: [URL]" | Claude scores every relevant person in your network for the role and saves the results |
+| 3 | "Open my CRM" | A local web app opens at http://localhost:8765 showing your ranked connections |
 
-All data stays on your machine — nothing is sent anywhere except to Apify for profile enrichment (which you can revoke after use).
+All data stays on your machine. Nothing is stored in the cloud except temporarily during Apify enrichment (which you revoke after use).
 
 ---
 
 ## Prerequisites
 
-- Python 3.9+
-- [Claude Code](https://claude.ai/code)
-- [Apify account](https://console.apify.com) — free tier (~$5/month credit) is enough
+- [Claude Code](https://claude.ai/code) — installed and working
+- [Python 3.9+](https://www.python.org/downloads/) — for running local scripts
+- [Apify account](https://console.apify.com) — free tier gives ~$5/month credit, enough for your first ~1,200 profiles
 
 ---
 
-## Install
+## Setup (one time)
 
-```bash
-git clone https://github.com/leadjobs-dev/career-network.git
-cd career-network
+**1. Create a fresh folder** anywhere on your computer — this is where your network data will live.
+
+**2. Open Claude Code** in that folder. (In the Claude Code desktop app: File → Open Folder. In VS Code with the Claude Code extension: open the folder, then open Claude Code.)
+
+**3. Install the skills** by running this in the Claude Code terminal (the `!` prefix runs shell commands):
+
+```
+! npx skills add leadjobs-dev/career-network
 ```
 
-Then install the skills to Claude Code. On **macOS/Linux** use symlinks so edits in the repo are reflected immediately:
+That's it. The `data/` folder will be created automatically when you run your first enrichment.
 
-```bash
-ln -s "$(pwd)/skills/crm-connections"          ~/.claude/skills/crm-connections
-ln -s "$(pwd)/skills/get-enriched-connections" ~/.claude/skills/get-enriched-connections
-ln -s "$(pwd)/skills/rank-connections"         ~/.claude/skills/rank-connections
-```
+### Verify the install
 
-On **Windows** (run in an admin PowerShell or with Developer Mode enabled):
+After installing, type this to Claude:
 
-```powershell
-$repo = (Get-Location).Path
-New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\crm-connections"          -Target "$repo\skills\crm-connections"
-New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\get-enriched-connections" -Target "$repo\skills\get-enriched-connections"
-New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\rank-connections"         -Target "$repo\skills\rank-connections"
-```
+> "What skills do you have for working with my LinkedIn connections?"
+
+Claude should describe the three skills (enrich, rank, CRM). If it doesn't, try restarting Claude Code.
 
 ---
 
 ## Usage
 
-Open a Claude Code session in the project directory and trigger each skill by describing what you want:
+Open Claude Code in your network folder and say:
 
 ### Step 1 — Enrich your connections
 
 > "Enrich my connections"
 
-Claude triggers `get-enriched-connections`. It asks for your `Connections.csv` and Apify token, runs enrichment, and writes to `data/`.
+Claude will ask for your `Connections.csv` (it explains how to export it from LinkedIn) and an Apify token (it explains how to get one for free). The enrichment runs in the background — 5–30 minutes depending on how many connections you have.
 
-**After the run:** revoke your Apify token at console.apify.com → Settings → API & Integrations.
+**Cost:** ~$4 per 1,000 profiles. Apify's free tier covers your first ~1,200 connections at no cost.
+
+**After the run:** Claude will remind you to revoke your Apify token. Do this — it's a good security habit. You'll create a fresh one next time.
+
+**Incremental:** Already ran this before? Just say "enrich my connections" again. Claude will only enrich new connections — existing profiles and all your notes are preserved.
 
 ### Step 2 — Rank for a job
 
-> "Rank my connections for this job: [URL]"
+> "Rank my connections for this job: [paste the job URL]"
 
-Claude triggers `rank-connections`. It fetches the job description, filters your network by location and keywords, scores each candidate, and writes `data/ranked_*.json`.
+Claude fetches the job description, filters your network by location and relevant keywords, scores every candidate on requirements match, seniority fit, and domain fit, and saves the results. It prints the top 10 when done.
 
 ### Step 3 — Open the CRM
 
 > "Open my CRM"
 
-Claude triggers `crm-connections`, which starts a local server at `http://localhost:8765`.
+Opens http://localhost:8765 automatically. You'll see:
 
-The **Network tab** shows all enriched connections. **Role tabs** appear automatically for every `ranked_*.json` file in `data/`. Click any row to expand it, annotate familiarity, leave notes, and track outreach.
+- **Network tab** — all your enriched connections, searchable and filterable
+- **Role tabs** — one per ranked job, sorted by fit score
 
----
-
-## Data layout
-
-```
-career-network/
-├── skills/                          # Claude skills (tracked in git)
-│   ├── crm-connections/
-│   ├── get-enriched-connections/
-│   └── rank-connections/
-├── tests/                           # Test suite
-├── data/                            # YOUR LOCAL DATA — gitignored
-│   ├── connections_index.json       #   enriched network + annotations
-│   ├── profiles/                    #   full profile JSONs (lazy-loaded)
-│   └── ranked_*.json                #   ranked results per job
-└── README.md
-```
-
-The `data/` folder is gitignored. Your LinkedIn data, enriched profiles, and CRM annotations never leave your machine.
+Click any row to expand it: see the full score breakdown, leave notes, mark familiarity, rate whether you'd work with this person, and mark their fit for the specific role. Everything auto-saves.
 
 ---
 
-## Development
+## CRM features
 
-```bash
-python -m pytest tests/ -v
-```
+| Feature | How it works |
+|---------|-------------|
+| **Sorting** | Click any column header — first click sorts highest first |
+| **Filtering** | Filter rows at the top let you narrow by familiarity or recommendation |
+| **Search** | Live search across name, position, company |
+| **Role fit** | Per-role field (Strong / Good / Weak / Not a fit) — separate from your global recommendation |
+| **Familiarity** | How well you know this person (Not familiar → Very close) |
+| **Recommendation** | Would you work with them again? Saved globally, not per-role |
+| **Notes** | Global notes + role-specific notes in the expand panel |
+| **Outreach tracking** | Log whether you've reached out, when, and what happened |
+| **Dark mode** | Toggle via the moon button |
 
 ---
 
-## Contributing
+## Your data
 
-PRs welcome for skill improvements, CRM UI enhancements, or new scoring logic. The `data/` folder is gitignored — don't commit personal data files.
+```
+your-folder/
+├── data/                        # YOUR DATA — stays on your machine
+│   ├── connections_index.json   #   enriched profiles + all your annotations
+│   ├── profiles/                #   full profile details (loaded on demand)
+│   └── ranked_*.json            #   ranked results per job
+```
+
+Back up the `data/` folder occasionally — it contains everything. If you share this folder across machines, copy the whole `data/` folder.
+
+---
+
+## Updating the skills
+
+To get the latest version of the skills:
+
+```
+! npx skills add leadjobs-dev/career-network
+```
+
+Run the same command — it updates in place.
