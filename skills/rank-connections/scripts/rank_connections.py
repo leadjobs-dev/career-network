@@ -125,8 +125,13 @@ def build_ranking_slim(url, index_entry, profile_data):
         s = slim_position(p)
         if s: positions.append(s)
 
+    def _as_str_list(val):
+        if not val: return []
+        if isinstance(val, str): return [s.strip() for s in val.split(',') if s.strip()]
+        return [s['name'] if isinstance(s, dict) else str(s) for s in val]
+
     skills = list(dict.fromkeys(
-        (profile_data.get('topSkills') or []) + (profile_data.get('skills') or [])
+        _as_str_list(profile_data.get('topSkills')) + _as_str_list(profile_data.get('skills'))
     ))[:10]
 
     return {

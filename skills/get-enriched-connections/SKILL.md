@@ -33,18 +33,26 @@ Only `Connections.csv` is needed from the ZIP.
 ---
 
 ### 0b. Apify token
-Ask the user to paste their Apify API token. If they don't have one:
+
+Explain what Apify is and why we need it, then ask the user to paste their token:
 
 ---
-**How to get an Apify token (free tier is enough):**
-1. Go to **console.apify.com** → Sign up
-2. Click avatar → **Settings** → **API & Integrations**
-3. Copy the token next to **Personal API tokens**
-4. Paste it in chat — Claude will use it for this session only
+**What is Apify and why do we need it?**
 
-**Cost:** ~$4 per 1000 profiles. Free tier gives $5/month.
+LinkedIn doesn't let you download your connections' full profile data directly. Apify is a web scraping service that fetches that data for us — work history, skills, current role, location — everything we need to rank people intelligently.
 
-**After the run:** Go back to Apify → API & Integrations → delete the token and create a fresh one next time.
+**It costs ~$4 per 1,000 profiles.** Apify's free tier gives you $5/month of credit, so your first 1,000 profiles are essentially free. You only pay if you go over.
+
+**Your token is used only for this session** — Claude runs the script locally on your machine. The token is never stored anywhere.
+
+**How to get your Apify token (takes 2 minutes):**
+1. Go to **console.apify.com** and create a free account
+2. Once logged in, click your avatar (top right) → **Settings**
+3. Click **API & Integrations** in the left sidebar
+4. Under **Personal API tokens**, click **+ Add new token**, give it any name, copy it
+5. Paste it here in chat
+
+**After the run is done:** Go back to that same page and delete the token. This is a good security habit — you'll create a fresh one next time.
 
 ---
 
