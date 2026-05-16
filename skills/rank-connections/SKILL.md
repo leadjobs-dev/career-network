@@ -1,6 +1,6 @@
 ---
 name: rank-connections
-description: Use when ranking LinkedIn connections for a specific job opening. Triggers on: "rank my connections for this job", "who should I refer", "find best matches in my network", "rank connections". Requires connections_index.json and profiles/ folder (from get-enriched-connections skill).
+description: 'Use when ranking LinkedIn connections for a specific job opening. Triggers on: "rank my connections for this job", "who should I refer", "find best matches in my network", "rank connections". Requires connections_index.json and profiles/ folder (from get-enriched-connections skill).'
 ---
 
 # Rank Connections

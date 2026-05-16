@@ -1,6 +1,6 @@
 ---
 name: crm-connections
-description: Use when the user wants to open their networking CRM, annotate LinkedIn connections, or track outreach. Triggers on: "open my CRM", "open the ranked connections", "annotate my connections", "update my network", "track outreach". Run with: python skills/crm-connections/scripts/crm_server.py
+description: 'Use when the user wants to open their networking CRM, annotate LinkedIn connections, or track outreach. Triggers on: "open my CRM", "open the ranked connections", "annotate my connections", "update my network", "track outreach".'
 ---
 
 # CRM Connections

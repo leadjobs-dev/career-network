@@ -1,6 +1,6 @@
 ---
 name: get-enriched-connections
-description: Use when the user wants to enrich their LinkedIn connections with full profile data. Triggers on: "enrich my connections", "get profile data for my connections", "download LinkedIn profiles", "prepare connections for ranking". Covers CSV export guide, Apify token setup, running the scraper, and producing connections_index.json + profiles/ folder.
+description: 'Use when the user wants to enrich their LinkedIn connections with full profile data. Triggers on: "enrich my connections", "get profile data for my connections", "download LinkedIn profiles", "prepare connections for ranking".'
 ---
 
 # Get Enriched Connections
