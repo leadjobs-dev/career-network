@@ -7,8 +7,10 @@ description: Use when the user wants to enrich their LinkedIn connections with f
 
 ## Overview
 Takes the user's LinkedIn Connections.csv, runs Apify enrichment, and produces two outputs:
-- `connections_index.json` — lightweight URL-keyed map of all enriched connections (display fields + blank annotation fields). Replaces both the old enriched JSON and annotations files.
-- `profiles/` folder — one JSON file per person with full profile data (loaded only when needed).
+- `data/connections_index.json` — lightweight URL-keyed map of all enriched connections (display fields + blank annotation fields).
+- `data/profiles/` folder — one JSON file per person with full profile data (loaded only when needed).
+
+**Incremental:** If `data/connections_index.json` already exists, the script automatically skips profiles already in the index — only new profiles are sent to Apify. Annotations and familiarity ratings are always preserved.
 
 **Script:** `skills/get-enriched-connections/scripts/enrich_connections.py` (run from your project root).
 
@@ -52,26 +54,37 @@ Do not proceed until both are confirmed.
 
 ## Step 1 — Count connections and decide path
 
-Read `skills/get-enriched-connections/scripts/enrich_connections.py` to understand the script, then run:
+Check how many connections are in the CSV and how many are already enriched:
 
 ```python
-import csv
+import csv, json, os
 with open(CSV_PATH, encoding='utf-8') as f:
     lines = f.readlines()
 header_idx = next(i for i, l in enumerate(lines) if l.startswith('First Name'))
 rows = list(csv.DictReader(lines[header_idx:]))
-print(f'Total connections: {len(rows)}')
+total = len(rows)
+
+already = 0
+if os.path.exists('data/connections_index.json'):
+    with open('data/connections_index.json', encoding='utf-8') as f:
+        already = len(json.load(f))
+
+print(f'Total connections: {total}')
+print(f'Already enriched:  {already}')
+print(f'New to enrich:     {total - already} (before keyword filter)')
 ```
 
-**If ≤ 1000:** Proceed to Step 2 with no keywords. Set `KEYWORDS = ""`.
+**If already enriched ≥ total:** Nothing to do — all connections are in the index.
 
-**If > 1000:**
-- Tell the user: *"You have N connections. To stay within Apify's free tier (~1000 profiles), I'll filter by job title keywords first. Please give me a job URL so I can extract the right keywords."*
-- Ask for a job URL (can be the one they plan to rank for, or any relevant role)
-- Use WebFetch to fetch the job posting
-- Extract a broad list of title/skill keywords (e.g. for an engineering role: `engineer,developer,software,backend,frontend,fullstack,tech lead,cto,vp engineering,architect,data,devops,platform,product`)
-- Set `KEYWORDS = "comma,separated,keywords"`
-- Note: **err on the side of broad keywords** — it's better to enrich extra people than miss relevant ones
+**Decide on keywords:**
+
+- **New to enrich ≤ 1000:** No keywords needed. Set `KEYWORDS = ""`.
+- **New to enrich > 1000:** Need keywords to stay within Apify budget.
+  - Tell the user: *"You have N new connections to enrich. To stay within Apify's free tier (~1000 profiles per run), I'll filter by job title keywords. Please give me a job URL so I can extract the right keywords."*
+  - Use WebFetch to fetch the job posting
+  - Extract a broad list of title/skill keywords (e.g. for an engineering role: `engineer,developer,software,backend,frontend,fullstack,tech lead,cto,vp engineering,architect,data,devops,platform,product`)
+  - Set `KEYWORDS = "comma,separated,keywords"`
+  - Note: **err on the side of broad keywords** — it's better to enrich extra people than miss relevant ones
 
 ---
 
@@ -82,25 +95,25 @@ python skills/get-enriched-connections/scripts/enrich_connections.py \
     --csv "PATH_TO_CSV" \
     --token "APIFY_TOKEN" \
     --keywords "KEYWORDS" \
-    --job-url "JOB_URL_IF_ANY" \
-    --output-dir "."
+    --job-url "JOB_URL_IF_ANY"
 ```
 
-This will:
-1. Load and filter/sort the CSV
-2. Submit URLs to Apify
-3. Poll until complete (5–30 minutes — tell user to wait)
-4. Download results
-5. Write `connections_index.json` and `profiles/` files
-6. Merge with any existing annotation data (annotations are never overwritten)
+The script will:
+1. Load and filter the CSV by keywords
+2. Skip any profiles already in `data/connections_index.json`
+3. Submit only new URLs to Apify
+4. Poll until complete (5–30 minutes — tell user to wait)
+5. Download results
+6. Merge into `data/connections_index.json` (annotations never overwritten)
+7. Write new per-profile files to `data/profiles/`
 
 ---
 
 ## Done
 
 Tell the user:
-- `connections_index.json` written — N entries
-- `profiles/` folder written — N files
+- `data/connections_index.json` updated — N total entries (X new added)
+- `data/profiles/` — N total files
 - **Remind them to revoke the Apify token** at console.apify.com → Settings → API & Integrations → Delete
 - Next step: use the **rank-connections** skill with a job URL to rank these profiles
 
@@ -110,6 +123,6 @@ Tell the user:
 |---------|-----|
 | `UnicodeDecodeError` on CSV | Script uses `encoding='utf-8'` — should be fine. If not, open the CSV in Notepad and save as UTF-8. |
 | CSV rows 1–3 are LinkedIn notes | Script handles this — finds real header by scanning for `First Name` |
-| >1000 connections but no keywords | Script falls back to taking oldest 1000. Always provide keywords for >1000 to get relevant people. |
+| New to enrich > 1000 but no keywords | Script falls back to taking oldest 1000 new profiles. Always provide keywords for large networks. |
 | Apify returns fewer profiles than submitted | Normal — LinkedIn blocks some. Script notes the count and continues. |
 | `connections_annotations.json` exists | Script auto-migrates it into the new index — no data lost. |

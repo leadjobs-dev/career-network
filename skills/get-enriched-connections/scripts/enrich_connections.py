@@ -279,8 +279,21 @@ def main():
     elif total > 1000:
         print(f'  WARNING: {total} connections but no --keywords provided. Taking oldest 1000.')
 
-    # Step 3: Sort by tenure (most tenured first), cap at 1000
+    # Step 3: Sort by tenure (most tenured first)
     rows.sort(key=lambda r: r.get('_days_connected', 0), reverse=True)
+
+    # Step 3b: Skip profiles already in the index (incremental enrichment)
+    index_path = os.path.join(output_dir, 'connections_index.json')
+    if os.path.exists(index_path):
+        with open(index_path, encoding='utf-8') as f:
+            already = {u.rstrip('/').lower() for u in json.load(f)}
+        before = len(rows)
+        rows = [r for r in rows if r.get('URL', '').strip().rstrip('/').lower() not in already]
+        skipped = before - len(rows)
+        if skipped:
+            print(f'  Already enriched: {skipped} skipped ({len(already)} total in index)')
+
+    # Cap at 1000 for Apify cost control
     rows = rows[:1000]
     print(f'  Enriching {len(rows)} connections')
 
