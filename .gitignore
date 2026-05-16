@@ -8,23 +8,8 @@ __pycache__/
 _rank_batches/
 _scores_tmp.json
 
-# Personal data — stays local, never committed
+# Personal data — stays local in data/, never committed
 data/
-connections_index.json
-connections_annotations.json
-profiles/
-ranked_*.json
-enriched_*.json
-filtered_*.csv
-*_profiles_tmp.json
-
-# LinkedIn exports
-Connections.csv
-Basic_LinkedInDataExport_*/
-Complete_LinkedInDataExport_*/
 
 # Claude Code project settings
 .claude/
-
-# Internal planning docs
-docs/superpowers/
