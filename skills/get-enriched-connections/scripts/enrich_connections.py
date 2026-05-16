@@ -254,6 +254,21 @@ def download_apify_results(token, dataset_id):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+RECOVERY_FILE = '_apify_run.json'
+
+
+def save_run_state(run_id, dataset_id=None):
+    with open(RECOVERY_FILE, 'w', encoding='utf-8') as f:
+        json.dump({'run_id': run_id, 'dataset_id': dataset_id}, f)
+
+
+def load_run_state():
+    if os.path.exists(RECOVERY_FILE):
+        with open(RECOVERY_FILE, encoding='utf-8') as f:
+            return json.load(f)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description='Enrich LinkedIn connections via Apify.')
     parser.add_argument('--csv',        required=True,  help='Path to Connections.csv')
@@ -261,10 +276,37 @@ def main():
     parser.add_argument('--keywords',   default='',     help='Comma-separated filter keywords (for >1000 path)')
     parser.add_argument('--job-url',    default='',     help='Job URL — saved to _meta if provided')
     parser.add_argument('--output-dir', default='data', help='Directory to write outputs (default: data/)')
+    parser.add_argument('--dataset-id', default='',     help='Skip submission and download from this Apify dataset ID directly (recovery mode)')
     args = parser.parse_args()
 
     keywords = [k.strip() for k in args.keywords.split(',') if k.strip()]
     output_dir = args.output_dir
+    index_path = os.path.join(output_dir, 'connections_index.json')
+
+    # Check for leftover recovery file from a previous interrupted run
+    if not args.dataset_id:
+        state = load_run_state()
+        if state:
+            print(f'WARNING: Found {RECOVERY_FILE} from a previous run (run_id={state["run_id"]}).')
+            print(f'  This means a previous enrichment may not have been merged.')
+            print(f'  To recover it, re-run with: --dataset-id {state.get("dataset_id") or "<check Apify console>"}')
+            print(f'  Delete {RECOVERY_FILE} to suppress this warning.')
+            print()
+
+    # Recovery mode: skip straight to download
+    if args.dataset_id:
+        print(f'Recovery mode: downloading from dataset {args.dataset_id}')
+        # Build csv_lookup from full CSV for _days_connected
+        rows_all = load_connections(args.csv)
+        csv_lookup = {r.get('URL', '').strip().rstrip('/'): r for r in rows_all if r.get('URL', '').strip()}
+        raw = download_apify_results(args.token, args.dataset_id)
+        print(f'  Downloaded {len(raw)} profiles')
+        total = len(rows_all)
+        profile_urls = []  # unknown in recovery mode
+        _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, args.job_url, total)
+        if os.path.exists(RECOVERY_FILE):
+            os.remove(RECOVERY_FILE)
+        return
 
     # Step 1: Load CSV
     print(f'Loading {args.csv}...')
@@ -283,7 +325,6 @@ def main():
     rows.sort(key=lambda r: r.get('_days_connected', 0), reverse=True)
 
     # Step 3b: Skip profiles already in the index (incremental enrichment)
-    index_path = os.path.join(output_dir, 'connections_index.json')
     if os.path.exists(index_path):
         with open(index_path, encoding='utf-8') as f:
             already = {u.rstrip('/').lower() for u in json.load(f)}
@@ -306,14 +347,16 @@ def main():
         print('No LinkedIn URLs found in CSV. Nothing to enrich.')
         return
 
-    # Step 5: Submit to Apify
+    # Step 5: Submit to Apify — save run ID immediately so we can recover if interrupted
     print(f'Submitting to Apify...')
     run_id = submit_apify_run(args.token, profile_urls)
-    print(f'  Run ID: {run_id}')
-    print('  Polling (this takes 5–30 minutes)...')
+    save_run_state(run_id)
+    print(f'  Run ID: {run_id}  (saved to {RECOVERY_FILE})')
+    print('  Polling (this takes 5-30 minutes)...')
 
     # Step 6: Poll
     status, dataset_id = poll_apify_run(args.token, run_id)
+    save_run_state(run_id, dataset_id)
     if status != 'SUCCEEDED':
         print(f'  Apify run ended with status: {status}. Continuing with partial results.')
 
@@ -324,7 +367,14 @@ def main():
     if len(raw) < len(profile_urls):
         print(f'  Note: {len(profile_urls) - len(raw)} profiles blocked by LinkedIn (normal)')
 
-    # Step 8: Build output files
+    _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, args.job_url, total)
+
+    # Clean up recovery file on success
+    if os.path.exists(RECOVERY_FILE):
+        os.remove(RECOVERY_FILE)
+
+
+def _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, job_url, total):
     profiles_dir = os.path.join(output_dir, 'profiles')
     os.makedirs(profiles_dir, exist_ok=True)
 
@@ -342,38 +392,35 @@ def main():
 
         csv_row = csv_lookup.get(url, {})
 
-        # Write profile file
         profile_data = build_profile_file(profile)
         profile_path = os.path.join(profiles_dir, f'{handle}.json')
         with open(profile_path, 'w', encoding='utf-8') as f:
             json.dump(profile_data, f, indent=2, ensure_ascii=False)
 
-        # Build index entry
         new_entries[url] = build_index_entry(profile, csv_row)
 
     if skipped:
         print(f'  Skipped {skipped} profiles (no URL or unrecognised handle)')
 
-    # Step 9: Merge with existing index
     print('Merging with existing index...')
-    index_path = os.path.join(output_dir, 'connections_index.json')
     merged = merge_index(new_entries, index_path)
 
-    # Set _meta
     merged['_meta'] = {
-        'jobUrl':       args.job_url,
-        'created':      date.today().isoformat(),
-        'totalInCsv':   total,
+        'jobUrl':        job_url,
+        'created':       date.today().isoformat(),
+        'totalInCsv':    total,
         'enrichedCount': len(new_entries),
-        'filtered':     total > 1000,
+        'filtered':      total > 1000,
     }
 
     with open(index_path, 'w', encoding='utf-8') as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
 
+    non_meta = sum(1 for k in merged if not k.startswith('_'))
     print(f'\nDone.')
-    print(f'  connections_index.json — {len(new_entries)} new/updated entries')
-    print(f'  profiles/              — {len(new_entries)} files written')
+    print(f'  New profiles added:    {len(new_entries)}')
+    print(f'  Total in index now:    {non_meta}')
+    print(f'  Profile files written: {len(new_entries)}')
     print(f'\nRemember to revoke your Apify token at console.apify.com -> Settings -> API & Integrations')
 
 

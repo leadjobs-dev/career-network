@@ -146,11 +146,41 @@ python skills/get-enriched-connections/scripts/enrich_connections.py \
 The script will:
 1. Load and filter the CSV by keywords
 2. Skip any profiles already in `data/connections_index.json`
-3. Submit only new URLs to Apify
+3. Submit only new URLs to Apify — **saves run ID to `_apify_run.json` immediately** so it can be recovered if interrupted
 4. Poll until complete — tell the user this can take **up to 2 hours for ~1,000 connections**, but they don't need to do anything; Claude will notify them when it's done
-5. Download results
-6. Merge into `data/connections_index.json` (annotations never overwritten)
-7. Write new per-profile files to `data/profiles/`
+5. Download results and merge into `data/connections_index.json`
+6. Write new per-profile files to `data/profiles/`
+7. Delete `_apify_run.json` on success
+
+---
+
+## Verify
+
+After the script finishes, confirm the index actually grew:
+
+```python
+import json
+with open('data/connections_index.json', encoding='utf-8') as f:
+    idx = json.load(f)
+print(sum(1 for k in idx if not k.startswith('_')), 'profiles in index')
+```
+
+The count should match the number of new profiles added. If it didn't grow, see Recovery below.
+
+---
+
+## Recovery (if script was interrupted after Apify submission)
+
+If the script crashes or is killed after submitting to Apify, `_apify_run.json` will exist with the run ID and dataset ID. Run with `--dataset-id` to download and merge without re-submitting:
+
+```bash
+python skills/get-enriched-connections/scripts/enrich_connections.py \
+    --csv "PATH_TO_CSV" \
+    --token "APIFY_TOKEN" \
+    --dataset-id "DATASET_ID_FROM_APIFY_OR_RECOVERY_FILE"
+```
+
+The dataset ID is in `_apify_run.json` (if it was saved before the crash), or find it in the Apify console: click the run → copy the Dataset ID shown on the run page.
 
 ---
 
@@ -175,3 +205,5 @@ After the user confirms (or says they'll handle it), **automatically continue to
 | New to enrich > 1000 but no keywords | Script falls back to taking oldest 1000 new profiles. Always provide keywords for large networks. |
 | Apify returns fewer profiles than submitted | Normal — LinkedIn blocks some. Script notes the count and continues. |
 | `connections_annotations.json` exists | Script auto-migrates it into the new index — no data lost. |
+| Index count didn't grow after script finished | Script may have been interrupted after Apify submission. Check `_apify_run.json` for the dataset ID, then re-run with `--dataset-id`. |
+| `_apify_run.json` exists at start of new run | A previous run may not have been merged. Recover it first with `--dataset-id` before starting a new submission. |
