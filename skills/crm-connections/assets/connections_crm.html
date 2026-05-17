@@ -126,7 +126,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .topbar {
   position: sticky; top: 0; z-index: 100;
   background: var(--topbar-bg); border-bottom: 1px solid var(--topbar-border);
-  padding: 0 16px; display: flex; align-items: center; gap: 12px;
+  padding: 0 12px; display: flex; align-items: center; gap: 10px;
   box-shadow: 0 1px 3px var(--divider); min-height: 52px;
 }
 .topbar h1 {
@@ -179,7 +179,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .filterbar {
   position: sticky; top: 52px; z-index: 99;
   background: var(--filter-bg); border-bottom: 1px solid var(--border);
-  padding: 7px 16px; display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 12px; display: flex; flex-direction: column; gap: 4px;
 }
 .filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .filter-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text3); min-width: 82px; }
@@ -214,13 +214,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 /* ── Table ── */
 .table-wrap {
-  margin: 14px 16px; border-radius: 10px; overflow: hidden;
+  margin: 10px 12px; border-radius: 10px; overflow: hidden;
   box-shadow: 0 1px 3px var(--divider); background: var(--surface);
   border: 1px solid var(--border);
 }
 table { width: 100%; border-collapse: collapse; }
 thead th {
-  text-align: left; padding: 9px 13px;
+  text-align: left; padding: 8px 9px;
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.6px; color: var(--th-color);
   border-bottom: 1px solid var(--border2); background: var(--th-bg); white-space: nowrap;
@@ -233,7 +233,7 @@ th.sort-asc  .sort-arrow::after { content: ' ↑'; color: #2563eb; }
 tr.data-row { cursor: pointer; border-bottom: 1px solid var(--row-border); transition: background 0.1s; }
 tr.data-row:hover    { background: var(--row-hover); }
 tr.data-row.expanded { background: var(--row-expand); }
-td { padding: 10px 13px; font-size: 13px; vertical-align: middle; }
+td { padding: 8px 9px; font-size: 13px; vertical-align: middle; }
 
 td.td-rank { font-size: 12px; font-weight: 600; color: var(--rank-color); width: 34px; text-align: center; }
 td.td-name { min-width: 130px; }
@@ -244,8 +244,8 @@ td.td-name { min-width: 130px; }
 .copy-icon { display: inline-flex; align-items: center; margin-left: 4px; opacity: 0.3; transition: opacity 0.15s, color 0.15s; vertical-align: middle; background: none; border: none; cursor: pointer; padding: 0; color: var(--text3); }
 .copy-icon:hover { opacity: 1; color: var(--text2); }
 .copy-icon.copied { opacity: 1; color: #16a34a; }
-td.td-pos .pos-main { color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; font-size: 13px; }
-td.td-pos .pos-sub  { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; margin-top: 1px; }
+td.td-pos .pos-main { color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; font-size: 13px; }
+td.td-pos .pos-sub  { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; margin-top: 1px; }
 td.td-score { text-align: center; }
 .score-pill {
   display: inline-flex; align-items: center; justify-content: center;
@@ -261,9 +261,9 @@ td.td-fam, td.td-rec { white-space: nowrap; }
 td.td-chev { width: 22px; color: var(--chev-color); text-align: center; font-size: 13px; user-select: none; }
 
 /* ── Inline annotation selector ── */
-.ann-seg { display: flex; gap: 2px; align-items: center; }
+.ann-seg { display: flex; gap: 1px; align-items: center; }
 .ann-seg-btn {
-  padding: 2px 7px; border-radius: 20px; font-size: 10.5px; font-weight: 500;
+  padding: 2px 5px; border-radius: 20px; font-size: 10.5px; font-weight: 500;
   cursor: pointer; user-select: none; border: 1px solid transparent;
   color: var(--seg-color); background: transparent; transition: all 0.1s; white-space: nowrap;
 }
