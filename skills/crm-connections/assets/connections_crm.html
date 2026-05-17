@@ -202,6 +202,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .ftag[data-dim="rec"].sel[data-v="neutral"]             { background: #d97706; }
 .ftag[data-dim="rec"].sel[data-v="would_work_with"]     { background: #16a34a; }
 .ftag[data-dim="rec"].sel[data-v="strongly_recommend"]  { background: #4f46e5; }
+.ftag[data-dim="fit"].sel[data-v="all"]               { background: #334155; }
+.ftag[data-dim="fit"].sel[data-v="unset"]             { background: #6b7280; }
+.ftag[data-dim="fit"].sel[data-v="strong"]            { background: #4f46e5; }
+.ftag[data-dim="fit"].sel[data-v="good"]              { background: #16a34a; }
+.ftag[data-dim="fit"].sel[data-v="weak"]              { background: #d97706; }
+.ftag[data-dim="fit"].sel[data-v="not_a_fit"]         { background: #dc2626; }
 
 .count-chip { display: inline-flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.15); border-radius: 6px; font-size: 10px; padding: 0 5px; margin-left: 3px; font-weight: 600; }
 .vis-count { margin-left: auto; font-size: 12px; color: var(--text3); align-self: flex-end; padding-bottom: 2px; }
@@ -406,6 +412,15 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
     <button class="ftag"     data-dim="rec" data-v="would_work_with"     onclick="setFilter('rec','would_work_with')">Would work with</button>
     <button class="ftag"     data-dim="rec" data-v="strongly_recommend"  onclick="setFilter('rec','strongly_recommend')">Strongly recommend</button>
   </div>
+  <div class="filter-row" id="fit-filter-row" style="display:none">
+    <span class="filter-label">Role fit</span>
+    <button class="ftag sel" data-dim="fit" data-v="all"       onclick="setFilter('fit','all')">All</button>
+    <button class="ftag"     data-dim="fit" data-v="unset"     onclick="setFilter('fit','unset')">Not reviewed</button>
+    <button class="ftag"     data-dim="fit" data-v="strong"    onclick="setFilter('fit','strong')">Strong fit</button>
+    <button class="ftag"     data-dim="fit" data-v="good"      onclick="setFilter('fit','good')">Good fit</button>
+    <button class="ftag"     data-dim="fit" data-v="weak"      onclick="setFilter('fit','weak')">Weak fit</button>
+    <button class="ftag"     data-dim="fit" data-v="not_a_fit" onclick="setFilter('fit','not_a_fit')">Not a fit</button>
+  </div>
 </div>
 
 <div class="table-wrap">
@@ -429,7 +444,7 @@ var FIT_ORDER  = { strong: 5, good: 4, weak: 3, unset: 2, not_a_fit: 1 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
 var tabs = []; var activeIdx = -1; var index = {}; var saveTimer = null;
-var famFilter = 'all'; var recFilter = 'all'; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
+var famFilter = ['all']; var recFilter = ['all']; var fitFilter = ['all']; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
 var sortKey = null; var sortDir = 'desc';
 var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
 
@@ -476,11 +491,17 @@ function buildTabs() {
 }
 
 function activateTab(idx) {
-  activeIdx = idx; famFilter = 'all'; recFilter = 'all'; activeSearch = ''; currentPage = 1; sortKey = null; sortDir = 'desc';
+  activeIdx = idx;
+  famFilter.length = 0; famFilter.push('all');
+  recFilter.length = 0; recFilter.push('all');
+  fitFilter.length = 0; fitFilter.push('all');
+  activeSearch = ''; currentPage = 1; sortKey = null; sortDir = 'desc';
   document.getElementById('search').value = '';
   document.querySelectorAll('.ftag').forEach(function(b){ b.classList.toggle('sel', b.dataset.v === 'all'); });
   buildTabs();
   var tab = tabs[idx];
+  var fitRow = document.getElementById('fit-filter-row');
+  if (fitRow) fitRow.style.display = (tab && tab.type === 'role') ? '' : 'none';
   if (tab.data) { updateHeader(tab.type); renderPage(); return; }
   if (tab.type === 'network') {
     // Load All Connections from index
@@ -752,8 +773,12 @@ function getFiltered() {
   var q = activeSearch.toLowerCase();
   var results = tab.data.filter(function(c) {
     var a = getAnn(c.url);
-    if (famFilter !== 'all' && a.familiarity !== famFilter) return false;
-    if (recFilter !== 'all' && a.recommendation !== recFilter) return false;
+    if (famFilter[0] !== 'all' && famFilter.indexOf(a.familiarity || 'not_familiar') === -1) return false;
+    if (recFilter[0] !== 'all' && recFilter.indexOf(a.recommendation || 'na') === -1) return false;
+    if (fitFilter[0] !== 'all' && tab && tab.type === 'role') {
+      var ra = getRoleAnn(c.url, tab.filename);
+      if (fitFilter.indexOf(ra.fit || 'unset') === -1) return false;
+    }
     if (!q) return true;
     var hay = (c._name + ' ' + (c.headline||'') + ' ' + (c.currentTitle||'') + ' ' + (c.currentCompany||'')).toLowerCase();
     return hay.indexOf(q) !== -1;
@@ -833,8 +858,16 @@ function goPage(n){ currentPage = n; renderPage(); window.scrollTo(0,0); }
 
 function updateChips() {
   var tab = tabs[activeIdx]; var data = tab && tab.data ? tab.data : [];
-  var famC = {}, recC = {};
-  data.forEach(function(c){ var a = getAnn(c.url); famC[a.familiarity||'not_familiar'] = (famC[a.familiarity||'not_familiar']||0)+1; recC[a.recommendation||'na'] = (recC[a.recommendation||'na']||0)+1; });
+  var famC = {}, recC = {}, fitC = {};
+  data.forEach(function(c) {
+    var a = getAnn(c.url);
+    famC[a.familiarity||'not_familiar'] = (famC[a.familiarity||'not_familiar']||0)+1;
+    recC[a.recommendation||'na'] = (recC[a.recommendation||'na']||0)+1;
+    if (tab && tab.type === 'role' && tab.filename) {
+      var ra = getRoleAnn(c.url, tab.filename);
+      fitC[ra.fit||'unset'] = (fitC[ra.fit||'unset']||0)+1;
+    }
+  });
   document.querySelectorAll('.ftag[data-dim="fam"][data-v]').forEach(function(btn){
     var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
     if (v !== 'all' && famC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = famC[v]; btn.appendChild(ch); }
@@ -842,6 +875,10 @@ function updateChips() {
   document.querySelectorAll('.ftag[data-dim="rec"][data-v]').forEach(function(btn){
     var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
     if (v !== 'all' && recC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = recC[v]; btn.appendChild(ch); }
+  });
+  document.querySelectorAll('.ftag[data-dim="fit"][data-v]').forEach(function(btn){
+    var v = btn.dataset.v, chip = btn.querySelector('.count-chip'); if (chip) chip.remove();
+    if (v !== 'all' && fitC[v]) { var ch = document.createElement('span'); ch.className = 'count-chip'; ch.textContent = fitC[v]; btn.appendChild(ch); }
   });
 }
 
@@ -989,8 +1026,19 @@ function onCheck(el, url) { var entry = ensureEntry(url); if (!entry.outreach) e
 function onDate(el, url)  { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.date = el.value; scheduleSave(); updateContactedBadge(url); }
 
 function setFilter(dim, v) {
-  if (dim === 'fam') famFilter = v; else recFilter = v; currentPage = 1;
-  document.querySelectorAll('.ftag[data-dim="'+dim+'"]').forEach(function(b){ b.classList.toggle('sel', b.dataset.v===v); }); renderPage();
+  var arr = dim === 'fam' ? famFilter : dim === 'rec' ? recFilter : fitFilter;
+  if (v === 'all') {
+    arr.length = 0; arr.push('all');
+  } else {
+    var ai = arr.indexOf('all'); if (ai !== -1) arr.splice(ai, 1);
+    var vi = arr.indexOf(v); if (vi !== -1) arr.splice(vi, 1); else arr.push(v);
+    if (arr.length === 0) arr.push('all');
+  }
+  currentPage = 1;
+  document.querySelectorAll('.ftag[data-dim="'+dim+'"]').forEach(function(b) {
+    b.classList.toggle('sel', arr[0] === 'all' ? b.dataset.v === 'all' : arr.indexOf(b.dataset.v) !== -1);
+  });
+  renderPage();
 }
 
 document.getElementById('search').addEventListener('input', function(e){ activeSearch = e.target.value; currentPage = 1; renderPage(); });
