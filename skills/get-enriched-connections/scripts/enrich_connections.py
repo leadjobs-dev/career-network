@@ -194,7 +194,7 @@ def merge_index(new_entries, index_path):
             # Migrate old-style annotations file
             with open(annotations_path, encoding='utf-8') as f:
                 existing = json.load(f)
-            print('Migrating connections_annotations.json → connections_index.json')
+            print('Migrating connections_annotations.json -> connections_index.json')
 
     merged = dict(existing)
     for url, new_entry in new_entries.items():
@@ -270,10 +270,15 @@ def load_run_state():
 
 
 def main():
+    import sys
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
     parser = argparse.ArgumentParser(description='Enrich LinkedIn connections via Apify.')
     parser.add_argument('--csv',        required=True,  help='Path to Connections.csv')
     parser.add_argument('--token',      required=True,  help='Apify API token')
-    parser.add_argument('--keywords',   default='',     help='Comma-separated filter keywords (for >1000 path)')
+    parser.add_argument('--keywords',   default='',     help='Comma-separated filter keywords')
+    parser.add_argument('--limit',      type=int, default=1000, help='Max profiles to submit to Apify (default: 1000)')
     parser.add_argument('--job-url',    default='',     help='Job URL — saved to _meta if provided')
     parser.add_argument('--output-dir', default='data', help='Directory to write outputs (default: data/)')
     parser.add_argument('--dataset-id', default='',     help='Skip submission and download from this Apify dataset ID directly (recovery mode)')
@@ -314,14 +319,12 @@ def main():
     total = len(rows)
     print(f'  {total} connections found')
 
-    # Step 2: Pre-filter if > 1000
-    if total > 1000 and keywords:
+    # Step 2: Keyword filter
+    if keywords:
         rows = filter_rows(rows, keywords)
         print(f'  After keyword filter: {len(rows)} connections (from {total})')
-    elif total > 1000:
-        print(f'  WARNING: {total} connections but no --keywords provided. Taking oldest 1000.')
 
-    # Step 3: Sort by tenure (most tenured first)
+    # Step 3: Sort by tenure (oldest connection = longest relationship, enriched first)
     rows.sort(key=lambda r: r.get('_days_connected', 0), reverse=True)
 
     # Step 3b: Skip profiles already in the index (incremental enrichment)
@@ -334,8 +337,10 @@ def main():
         if skipped:
             print(f'  Already enriched: {skipped} skipped ({len(already)} total in index)')
 
-    # Cap at 1000 for Apify cost control
-    rows = rows[:1000]
+    # Apply limit
+    if len(rows) > args.limit:
+        print(f'  Applying limit: {args.limit} most-tenured selected from {len(rows)} candidates')
+        rows = rows[:args.limit]
     print(f'  Enriching {len(rows)} connections')
 
     # Step 4: Build inputs

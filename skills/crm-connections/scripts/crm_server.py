@@ -118,10 +118,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    import sys
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     srv = http.server.HTTPServer(('localhost', PORT), Handler)
     url = f'http://localhost:{PORT}'
     print(f'Connections CRM running at {url}')
-    print('Drop ranked_*.json files here — role tabs appear on refresh.')
+    print('Drop ranked_*.json files here - role tabs appear on refresh.')
     print('Press Ctrl+C to stop.')
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

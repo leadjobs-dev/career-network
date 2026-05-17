@@ -63,49 +63,21 @@ Set:
 
 ---
 
-## Step 2 — Preview: count and sample matching connections
+## Step 2 — Confirm scope with the user
 
-Before asking for an Apify token, show the user exactly how many connections would be submitted. Run this Python snippet:
+If invoked from the rank-connections skill, the coverage check was already run and the user already chose how many to enrich — skip straight to Step 3.
 
-```python
-import csv, json, os
+If invoked directly, run the coverage check now:
 
-keywords = [kw.strip().lower() for kw in KEYWORDS.split(',') if kw.strip()]
-
-with open(CSV_PATH, encoding='utf-8') as f:
-    lines = f.readlines()
-header_idx = next(i for i, l in enumerate(lines) if l.startswith('First Name'))
-rows = list(csv.DictReader(lines[header_idx:]))
-
-already_urls = set()
-if os.path.exists('data/connections_index.json'):
-    with open('data/connections_index.json', encoding='utf-8') as f:
-        already_urls = set(json.load(f).keys())
-
-new_matching = []
-for row in rows:
-    position = (row.get('Position') or '').lower()
-    company = (row.get('Company') or '').lower()
-    combined = position + ' ' + company
-    url = row.get('URL', '')
-    if url in already_urls:
-        continue
-    if not keywords or any(kw in combined for kw in keywords):
-        new_matching.append(row)
-
-print(f'New connections to enrich: {len(new_matching)}')
-print('Sample (first 15):')
-for r in new_matching[:15]:
-    name = f"{r.get('First Name', '')} {r.get('Last Name', '')}".encode('ascii', 'replace').decode()
-    pos = (r.get('Position') or '').encode('ascii', 'replace').decode()
-    print(f'  {name} -- {pos}')
+```bash
+python skills/rank-connections/scripts/rank_connections.py coverage \
+    --csv "CSV_PATH" \
+    --keywords "KEYWORDS"
 ```
 
-Show the count and sample to the user, then ask:
-- If count > 1,000: warn that this exceeds Apify's free tier (~$4 per 1,000). Ask if they want to narrow keywords or accept the cost.
-- If count ≤ 1,000: confirm and ask them to proceed.
+Show the output to the user and let them pick an option. The command prints enriched vs. unenriched counts, cost tiers (500 / 1000 / 1250 / all), and a ready-to-run enrichment command.
 
-**Do not ask for the Apify token until the user confirms they're happy with the scope.**
+**Do not ask for the Apify token until the user has confirmed how many profiles to enrich.**
 
 ---
 
@@ -118,7 +90,7 @@ Ask the user to paste their Apify token:
 
 LinkedIn doesn't let you download your connections' full profile data directly. Apify is a web scraping service that fetches that data for us — work history, skills, current role, location — everything we need to rank people intelligently.
 
-**It costs ~$4 per 1,000 profiles.** Apify's free tier gives you $5/month of credit — enough for your first ~1,200 connections at no cost.
+**It costs $1 per 250 profiles** (~$4 per 1,000). Apify's free tier gives you $5/month of credit — enough for your first ~1,250 connections at no cost.
 
 **Your token is used only for this session** — Claude runs the script locally on your machine. The token is never stored anywhere.
 
@@ -140,8 +112,11 @@ python skills/get-enriched-connections/scripts/enrich_connections.py \
     --csv "PATH_TO_CSV" \
     --token "APIFY_TOKEN" \
     --keywords "KEYWORDS" \
+    --limit N \
     --job-url "JOB_URL_IF_ANY"
 ```
+
+`--limit N` caps how many profiles are submitted to Apify (default: 1000). The script always picks the most-tenured (oldest connections first) up to that limit. Use the number the user chose from the coverage check.
 
 The script will:
 1. Load and filter the CSV by keywords
@@ -202,7 +177,7 @@ After the user confirms (or says they'll handle it), **automatically continue to
 | `UnicodeDecodeError` on CSV | Script uses `encoding='utf-8'` — should be fine. If not, open the CSV in Notepad and save as UTF-8. |
 | Using `.encode('ascii', 'replace')` only on final print | Apply it per field, not on the whole formatted string |
 | CSV rows 1–3 are LinkedIn notes | Script handles this — finds real header by scanning for `First Name` |
-| New to enrich > 1000 but no keywords | Script falls back to taking oldest 1000 new profiles. Always provide keywords for large networks. |
+| Not using `--limit` when user chose a specific count | The coverage command tells you the limit — pass it explicitly with `--limit N`. Default is 1000. |
 | Apify returns fewer profiles than submitted | Normal — LinkedIn blocks some. Script notes the count and continues. |
 | `connections_annotations.json` exists | Script auto-migrates it into the new index — no data lost. |
 | Index count didn't grow after script finished | Script may have been interrupted after Apify submission. Check `_apify_run.json` for the dataset ID, then re-run with `--dataset-id`. |

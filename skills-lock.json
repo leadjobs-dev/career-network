@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "crm-connections": {
+      "source": "leadjobs-dev/career-network",
+      "sourceType": "github",
+      "skillPath": "skills/crm-connections/SKILL.md",
+      "computedHash": "14535c88a82ba166a9c9e90a4b9acb4961a2800841cfdf2ce478e3e91b8615a9"
+    },
+    "get-enriched-connections": {
+      "source": "leadjobs-dev/career-network",
+      "sourceType": "github",
+      "skillPath": "skills/get-enriched-connections/SKILL.md",
+      "computedHash": "47c279869ea7faead96d2164507ce8642189445c1038223e7005bae1ceb80640"
+    },
+    "rank-connections": {
+      "source": "leadjobs-dev/career-network",
+      "sourceType": "github",
+      "skillPath": "skills/rank-connections/SKILL.md",
+      "computedHash": "7a250e430d0ca6e7edbacb2552890a2f1b45f3544aeb02903cffa7de9a81cfc1"
+    }
+  }
+}
