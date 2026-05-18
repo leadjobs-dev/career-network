@@ -153,6 +153,32 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 }
 .tab-btn.active .tab-count { background: var(--tab-active-count-bg); color: var(--tab-active-count-color); }
 .tab-divider { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; align-self: center; margin: 0 3px; }
+.tab-arch-icon {
+  display: inline-flex; align-items: center; margin-left: 2px;
+  opacity: 0; transition: opacity 0.1s; padding: 1px 2px; border-radius: 3px; color: inherit;
+}
+.tab-btn:hover .tab-arch-icon { opacity: 0.45; }
+.tab-arch-icon:hover { opacity: 1 !important; background: rgba(0,0,0,0.12); }
+[data-theme="dark"] .tab-arch-icon:hover { background: rgba(255,255,255,0.15); }
+.tab-arch-menu-btn { color: var(--text3); gap: 4px; }
+.arch-dd {
+  position: fixed; z-index: 2000;
+  background: var(--dropdown-bg); border: 1px solid var(--dropdown-border); border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15); min-width: 210px; padding: 4px 0;
+}
+.arch-dd-item {
+  padding: 7px 12px; display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text2); transition: background 0.08s;
+}
+.arch-dd-item:hover { background: var(--row-hover); }
+.arch-dd-label { flex: 1; cursor: pointer; }
+.arch-dd-label:hover { color: var(--text); }
+.arch-restore-btn {
+  padding: 2px 8px; border-radius: 5px; border: 1px solid var(--ftag-border);
+  background: var(--ftag-bg); color: var(--text2); cursor: pointer; font-size: 11px;
+  white-space: nowrap; font-family: inherit; flex-shrink: 0;
+}
+.arch-restore-btn:hover { border-color: var(--text3); color: var(--text); background: var(--ftag-hover-bg); }
 
 /* ── Dark mode toggle ── */
 .dark-toggle {
@@ -447,6 +473,8 @@ var tabs = []; var activeIdx = -1; var index = {}; var saveTimer = null;
 var famFilter = ['all']; var recFilter = ['all']; var fitFilter = ['all']; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
 var sortKey = null; var sortDir = 'desc';
 var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
+var archivedRoles = new Set(JSON.parse(localStorage.getItem('crm_archivedRoles') || '[]'));
+var archDropdown = null;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 Promise.all([
@@ -472,22 +500,40 @@ Promise.all([
 }).catch(function(){ setStatus('Server not responding','error'); });
 
 // ── Tab rendering ─────────────────────────────────────────────────────────────
+var ARCH_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+
 function buildTabs() {
   var el = document.getElementById('tabs'); el.innerHTML = ''; var lastType = null;
+  var numArchived = 0;
   tabs.forEach(function(tab, idx) {
+    var isArchived = tab.type === 'role' && archivedRoles.has(tab.filename);
+    if (isArchived) { numArchived++; if (idx !== activeIdx) return; }
     if (lastType === 'network' && tab.type === 'role') {
       var d = document.createElement('div'); d.className = 'tab-divider'; el.appendChild(d);
     }
     lastType = tab.type;
     var btn = document.createElement('button');
     btn.className = 'tab-btn' + (idx === activeIdx ? ' active' : '');
-    btn.textContent = tab.label;
+    btn.onclick = (function(i){ return function(){ activateTab(i); }; })(idx);
+    var lbl = document.createElement('span'); lbl.textContent = tab.label; btn.appendChild(lbl);
     if (tab.count) {
       var chip = document.createElement('span'); chip.className = 'tab-count'; chip.textContent = tab.count; btn.appendChild(chip);
     }
-    btn.onclick = (function(i){ return function(){ activateTab(i); }; })(idx);
+    if (tab.type === 'role' && !isArchived) {
+      var ai = document.createElement('span');
+      ai.className = 'tab-arch-icon'; ai.title = 'Archive'; ai.innerHTML = ARCH_ICON;
+      ai.onclick = (function(i){ return function(e){ e.stopPropagation(); archiveRole(i); }; })(idx);
+      btn.appendChild(ai);
+    }
     el.appendChild(btn);
   });
+  if (numArchived > 0) {
+    var ab = document.createElement('button');
+    ab.className = 'tab-btn tab-arch-menu-btn'; ab.id = 'arch-menu-btn';
+    ab.innerHTML = ARCH_ICON + ' Archived <span class="tab-count">' + numArchived + '</span>';
+    ab.onclick = function(e){ e.stopPropagation(); toggleArchivedDropdown(ab); };
+    el.appendChild(ab);
+  }
 }
 
 function activateTab(idx) {
@@ -1094,6 +1140,53 @@ function updateContactedBadge(url) {
     el.textContent = text; el.style.display = text ? '' : 'none';
   });
 }
+
+function archiveRole(idx) {
+  var tab = tabs[idx]; if (!tab || tab.type !== 'role') return;
+  archivedRoles.add(tab.filename);
+  var arr = []; archivedRoles.forEach(function(v){ arr.push(v); });
+  localStorage.setItem('crm_archivedRoles', JSON.stringify(arr));
+  if (activeIdx === idx) {
+    var fallback = 0;
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].type === 'network' || (tabs[i].type === 'role' && !archivedRoles.has(tabs[i].filename))) { fallback = i; break; }
+    }
+    activateTab(fallback);
+  } else {
+    buildTabs();
+  }
+}
+
+function unarchiveRole(filename) {
+  archivedRoles.delete(filename);
+  var arr = []; archivedRoles.forEach(function(v){ arr.push(v); });
+  localStorage.setItem('crm_archivedRoles', JSON.stringify(arr));
+  closeArchDropdown(); buildTabs();
+}
+
+function toggleArchivedDropdown(btn) {
+  if (archDropdown) { closeArchDropdown(); return; }
+  var rect = btn.getBoundingClientRect();
+  var dd = document.createElement('div'); dd.className = 'arch-dd';
+  dd.style.top = (rect.bottom + 4) + 'px'; dd.style.left = rect.left + 'px';
+  tabs.forEach(function(tab, idx) {
+    if (tab.type !== 'role' || !archivedRoles.has(tab.filename)) return;
+    var item = document.createElement('div'); item.className = 'arch-dd-item';
+    var lbl = document.createElement('span'); lbl.className = 'arch-dd-label'; lbl.textContent = tab.label;
+    lbl.onclick = (function(i){ return function(){ closeArchDropdown(); activateTab(i); }; })(idx);
+    var rb = document.createElement('button'); rb.className = 'arch-restore-btn'; rb.textContent = 'Restore';
+    rb.onclick = (function(fn){ return function(e){ e.stopPropagation(); unarchiveRole(fn); }; })(tab.filename);
+    item.appendChild(lbl); item.appendChild(rb); dd.appendChild(item);
+  });
+  document.body.appendChild(dd); archDropdown = dd;
+  setTimeout(function(){
+    document.addEventListener('click', function onOutside(e){
+      if (archDropdown && !archDropdown.contains(e.target)) { closeArchDropdown(); document.removeEventListener('click', onOutside); }
+    });
+  }, 0);
+}
+
+function closeArchDropdown() { if (archDropdown) { archDropdown.remove(); archDropdown = null; } }
 
 function toggleDark() {
   var html = document.documentElement;
