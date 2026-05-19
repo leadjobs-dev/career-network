@@ -1,6 +1,6 @@
 ---
 name: get-enriched-connections
-description: 'Use to start the full referral-finding pipeline, or to enrich LinkedIn connections. Triggers on: "find who to refer", "find someone to refer", "who in my network should I refer", "I want to refer someone to an open role", "enrich my connections", "get profile data for my connections", "prepare connections for ranking".'
+description: 'Use to start the full referral-finding pipeline, or to enrich LinkedIn connections. Triggers on: "find who to refer", "find someone to refer", "who in my network should I refer", "I want to refer someone to an open role", "enrich my connections", "get profile data for my connections", "prepare connections for ranking", "I have my Connections.csv", "I have my LinkedIn CSV", "I downloaded my connections", "here is my CSV", "I got the CSV".'
 ---
 
 # Get Enriched Connections
@@ -28,7 +28,9 @@ Store as `JOB_URL`.
 
 ### 0b. Connections.csv
 
-Give the user these export instructions, then **STOP AND WAIT** — do not proceed to Step 1 until the user explicitly confirms they have `Connections.csv` and provides the path to it:
+**If the user already has `Connections.csv`, skip the export instructions and go straight to Step 1.**
+
+Otherwise, give the user these export instructions and wait:
 
 ---
 **How to export your LinkedIn connections:**
@@ -42,7 +44,11 @@ Only `Connections.csv` is needed from the ZIP.
 
 ---
 
-**Wait here. Do not move on until the user confirms they have the file and tells you where it is.**
+End your message with this exact line so the user knows what to do next:
+
+> "LinkedIn takes 15–20 minutes to send the download link. **When you have the file, reply with:** `I have my Connections.csv at [full path to file]`"
+
+**When the user returns with the file path: do NOT analyze or comment on the CSV contents. Proceed immediately to Step 1.**
 
 ---
 
