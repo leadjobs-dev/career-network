@@ -23,38 +23,6 @@ import argparse, csv as csv_mod, glob, json, os, re, shutil
 from datetime import date, datetime
 
 
-# -- Scoring helpers -----------------------------------------------------------
-
-def parse_tenure_years(s):
-    if not s:
-        return None
-    s = s.lower()
-    y = re.search(r'(\d+)\s*y', s)
-    m = re.search(r'(\d+)\s*mo', s)
-    if not m:
-        m = re.search(r'(\d+)\s*m\b', s)
-    years = (int(y.group(1)) if y else 0) + (int(m.group(1)) / 12 if m else 0)
-    return years if (y or m) else None
-
-
-def mobility_bonus(tenure_str):
-    yrs = parse_tenure_years(tenure_str)
-    if yrs is None: return 5
-    if yrs < 1:     return 0
-    if yrs < 3:     return 5
-    if yrs < 7:     return 10
-    return 5
-
-
-def relationship_bonus(days):
-    years = days / 365
-    if years >= 10: return 10
-    if years >= 5:  return 8
-    if years >= 3:  return 5
-    if years >= 1:  return 3
-    return 1
-
-
 # -- Filters -------------------------------------------------------------------
 
 def passes_location_filter(entry, location):
@@ -379,29 +347,14 @@ def cmd_merge(args):
     rankings = []
     for s in all_scores:
         url   = (s.get('url') or '').rstrip('/')
-        entry = index.get(url, {})
-
-        req = float(s.get('requirements_match', 0) or 0)
-        sen = float(s.get('seniority_fit', 0) or 0)
-        dom = float(s.get('domain_fit', 0) or 0)
-        llm = round((req + sen + dom) / 3, 1)
-        rel = relationship_bonus(entry.get('daysConnected', 0))
-        mob = mobility_bonus(entry.get('tenureInRole', ''))
-        final = round(llm * 0.80 + rel * 0.10 + mob * 0.10, 1)
-
+        score = float(s.get('score', 0) or 0)
         rankings.append({
-            'url':                url,
-            'final_score':        final,
-            'llm_score':          llm,
-            'requirements_match': req,
-            'seniority_fit':      sen,
-            'domain_fit':         dom,
-            'relationship_bonus': rel,
-            'mobility_bonus':     mob,
-            'reason':             s.get('reason', ''),
+            'url':    url,
+            'score':  score,
+            'reason': s.get('reason', ''),
         })
 
-    rankings.sort(key=lambda x: x['final_score'], reverse=True)
+    rankings.sort(key=lambda x: x['score'], reverse=True)
 
     slug  = re.sub(r'[^a-z0-9]', '', args.role_name.lower())[:20] or 'role'
     today = date.today().strftime('%Y%m%d')
@@ -423,7 +376,7 @@ def cmd_merge(args):
     for i, r in enumerate(rankings[:10], 1):
         entry = index.get(r['url'], {})
         name  = f"{entry.get('firstName', '')} {entry.get('lastName', '')}".strip() or r['url']
-        print(f'  {i:2}. {name:<30}  {r["final_score"]:4.1f}  {r["reason"][:60]}')
+        print(f'  {i:2}. {name:<30}  {r["score"]:4.1f}  {r["reason"][:60]}')
 
     batch_dir = os.path.join(args.output_dir, '_rank_batches')
     if os.path.exists(batch_dir):

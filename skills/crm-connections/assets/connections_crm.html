@@ -283,6 +283,7 @@ td.td-score { text-align: center; }
 .final-score { font-size: 15px; font-weight: 800; color: var(--final-score); letter-spacing: -0.3px; }
 
 td.td-loc { font-size: 12px; color: var(--text3); white-space: nowrap; }
+td.td-tenure, td.td-connected { font-size: 12px; color: var(--text2); white-space: nowrap; }
 td.td-fam, td.td-rec { white-space: nowrap; }
 td.td-chev { width: 22px; color: var(--chev-color); text-align: center; font-size: 13px; user-select: none; }
 
@@ -557,7 +558,7 @@ function activateTab(idx) {
     updateHeader('network'); renderPage(); return;
   }
   // Role tab — load ranked file
-  document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="11">Loading ' + esc(tab.label) + '...</td></tr>';
+  document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="10">Loading ' + esc(tab.label) + '...</td></tr>';
   document.getElementById('pager').innerHTML = ''; setStatus('Loading...','saving');
   fetch('/data/' + tab.filename).then(function(r){ return r.json(); }).then(function(raw) {
     var rankings, meta;
@@ -584,10 +585,8 @@ function activateTab(idx) {
     tab.data = rankings.map(function(r) {
       var entry = index[r.url] || {};
       var conn = normalizeConn(r.url, entry);
-      conn.final_score = r.final_score; conn.llm_score = r.llm_score;
-      conn.requirements_match = r.requirements_match; conn.seniority_fit = r.seniority_fit;
-      conn.domain_fit = r.domain_fit; conn.relationship_bonus = r.relationship_bonus;
-      conn.mobility_bonus = r.mobility_bonus; conn.reason = r.reason;
+      conn.score = r.score != null ? r.score : r.final_score;  // compat with old format
+      conn.reason = r.reason;
       return conn;
     });
     setStatus('',''); updateHeader('role'); renderPage();
@@ -623,9 +622,8 @@ function updateHeader(type) {
       th('Name', 'name') +
       '<th>Position</th>' +
       th('Score', 'score', 'score-col') +
-      th('Req.', 'req', 'score-col') +
-      th('Senior.', 'senior', 'score-col') +
-      th('Domain', 'domain', 'score-col') +
+      th('Tenure', 'tenure') +
+      th('Connected', 'connected') +
       th('Role fit', 'fit') +
       th('Familiarity', 'fam') +
       th('Recommendation', 'rec') +
@@ -673,6 +671,17 @@ function ensureEntry(url) {
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function scoreCls(v){ return v >= 7 ? 'hi' : v >= 4 ? 'mid' : 'lo'; }
+function fmtTenure(s) {
+  if (!s) return '—';
+  return s.replace(/\s*yrs?\s*/g, 'y ').replace(/\s*mos?\s*/g, 'mo').replace(/\s+$/, '').trim();
+}
+function fmtDays(days) {
+  if (!days) return '—';
+  var y = Math.floor(days / 365); var m = Math.floor((days % 365) / 30);
+  if (y > 0 && m > 0) return y + 'y ' + m + 'mo';
+  if (y > 0) return y + 'y';
+  return m > 0 ? m + 'mo' : days + 'd';
+}
 function setStatus(msg, cls){ var el = document.getElementById('save-status'); el.textContent = msg; el.className = 'save-status' + (cls ? ' '+cls : ''); }
 function handleFromUrl(url){ var m = (url||'').match(/\/in\/([^/?#]+)/); return m ? m[1] : null; }
 
@@ -797,19 +806,24 @@ function setSort(key) {
   renderPage();
 }
 
+function tenureToYears(s) {
+  if (!s) return 0;
+  var y = s.match(/(\d+)\s*yr/); var m = s.match(/(\d+)\s*mo/);
+  return (y ? parseInt(y[1]) : 0) + (m ? parseInt(m[1]) / 12 : 0);
+}
+
 function getSortVal(c, key) {
   var tab = tabs[activeIdx];
-  if (key === 'score')  return c.final_score || 0;
-  if (key === 'req')    return c.requirements_match || 0;
-  if (key === 'senior') return c.seniority_fit || 0;
-  if (key === 'domain') return c.domain_fit || 0;
-  if (key === 'name')   return (c._name || '').toLowerCase();
-  if (key === 'fit')    return FIT_ORDER[getRoleAnn(c.url, tab && tab.filename).fit] || 0;
+  if (key === 'score')     return c.score || 0;
+  if (key === 'tenure')    return tenureToYears(c.tenureInRole);
+  if (key === 'connected') return c.daysConnected || 0;
+  if (key === 'name')      return (c._name || '').toLowerCase();
+  if (key === 'fit')       return FIT_ORDER[getRoleAnn(c.url, tab && tab.filename).fit] || 0;
   if (key === 'fam') {
     var rawFam = (index[c.url] || {}).familiarity;
     return rawFam ? (FAM_ORDER[rawFam] !== undefined ? FAM_ORDER[rawFam] : 0) : 1;
   }
-  if (key === 'rec')    return REC_ORDER[getAnn(c.url).recommendation || 'na'] || 0;
+  if (key === 'rec')       return REC_ORDER[getAnn(c.url).recommendation || 'na'] || 0;
   return 0;
 }
 
@@ -848,7 +862,7 @@ function renderPage() {
   var slice = filtered.slice((currentPage-1)*PAGE_SIZE, currentPage*PAGE_SIZE);
   var type = tab ? tab.type : 'network';
   var tbody = document.getElementById('tbody'); tbody.innerHTML = '';
-  var colCount = (type === 'role') ? 11 : 6;
+  var colCount = (type === 'role') ? 10 : 6;
   if (total === 0) {
     tbody.innerHTML = '<tr><td colspan="'+colCount+'" class="no-results">No connections match.</td></tr>';
   } else {
@@ -866,20 +880,18 @@ function renderPage() {
       var contactedBadge = '<span class="contacted-badge" data-contact-badge="'+esc(url)+'"'+(contactedText?'':' style="display:none"')+'>'+esc(contactedText)+'</span>';
       var nameCell = (url ? '<a class="name-link" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()">'+esc(c._name)+'</a>' : esc(c._name)) + liIcon + copyIcon + contactedBadge;
       var pos1 = c.currentTitle && c.currentCompany ? c.currentTitle + ' at ' + c.currentCompany : (c.currentTitle || c.currentCompany || c.headline || '');
-      var pos2 = c.tenureInRole || '';
+      var pos2 = (type === 'role') ? '' : (c.tenureInRole || '');
       var posCell = (pos1 ? '<div class="pos-main">'+esc(pos1)+'</div>' : '') + (pos2 ? '<div class="pos-sub">'+esc(pos2)+'</div>' : '');
       var famCell = makeFamSeg(url, fam);
       var recCell = makeRecSeg(url, rec, fam === 'not_familiar');
       var cells = '';
       if (type === 'role') {
-        var rank = (currentPage-1)*PAGE_SIZE+idx+1; var fs = c.final_score||0;
-        var rm = c.requirements_match||0; var sf = c.seniority_fit||0; var df = c.domain_fit||0;
+        var rank = (currentPage-1)*PAGE_SIZE+idx+1; var sc = c.score || 0;
         var ra = getRoleAnn(url, roleFilename); var fitCell = makeFitSeg(url, ra.fit, roleFilename);
         cells = '<td class="td-rank">'+rank+'</td><td class="td-name">'+nameCell+'</td><td class="td-pos">'+posCell+'</td>'+
-          '<td class="td-score"><span class="final-score">'+fs.toFixed(1)+'</span></td>'+
-          '<td class="td-score"><span class="score-pill '+scoreCls(rm)+'">'+rm+'</span></td>'+
-          '<td class="td-score"><span class="score-pill '+scoreCls(sf)+'">'+sf+'</span></td>'+
-          '<td class="td-score"><span class="score-pill '+scoreCls(df)+'">'+df+'</span></td>'+
+          '<td class="td-score"><span class="final-score">'+sc.toFixed(1)+'</span></td>'+
+          '<td class="td-tenure">'+esc(fmtTenure(c.tenureInRole))+'</td>'+
+          '<td class="td-connected">'+esc(fmtDays(c.daysConnected))+'</td>'+
           '<td class="td-fit">'+fitCell+'</td>'+
           '<td class="td-fam">'+famCell+'</td><td class="td-rec">'+recCell+'</td><td class="td-chev">&#8250;</td>';
       } else {
@@ -949,18 +961,11 @@ function toggleExpand(url, tr, c, type) {
   var fitPills = roleFilename ? Object.keys(FIT_LABELS).map(function(v){ return '<button class="ann-pill'+(ra.fit===v?' active':'')+'" data-dim="fit" data-v="'+v+'" onclick="pickRoleFit(this,event,\''+url+'\',\''+esc(roleFilename)+'\')">'+FIT_LABELS[v]+'</button>'; }).join('') : '';
 
   var scoreSection = '';
-  if (type === 'role' && c.final_score != null) {
-    scoreSection = '<div class="lbl">Score breakdown</div><div class="score-breakdown">'+
-      '<div class="score-item"><div class="si-val">'+(c.final_score||0).toFixed(1)+'</div><div class="si-lbl">Final</div></div>'+
-      '<div class="score-item"><div class="si-val">'+(c.requirements_match||0)+'</div><div class="si-lbl">Req.</div></div>'+
-      '<div class="score-item"><div class="si-val">'+(c.seniority_fit||0)+'</div><div class="si-lbl">Seniority</div></div>'+
-      '<div class="score-item"><div class="si-val">'+(c.domain_fit||0)+'</div><div class="si-lbl">Domain</div></div>'+
-      '<div class="score-item"><div class="si-val">'+(c.relationship_bonus||0)+'</div><div class="si-lbl">Tenure</div></div>'+
-      '<div class="score-item"><div class="si-val">'+(c.mobility_bonus||0)+'</div><div class="si-lbl">Mobility</div></div>'+
-      '</div>'+(c.reason ? '<div class="reason-text">'+esc(c.reason)+'</div>' : '');
+  if (type === 'role' && c.score != null && c.reason) {
+    scoreSection = '<div class="lbl">Reasoning</div><div class="reason-text" style="margin-top:4px">'+esc(c.reason)+'</div>';
   }
 
-  var colSpan = (type === 'role') ? '11' : '6'; var outreach = a.outreach || {};
+  var colSpan = (type === 'role') ? '10' : '6'; var outreach = a.outreach || {};
   var xtr = document.createElement('tr'); xtr.className = 'expand-row';
   xtr.innerHTML = '<td colspan="'+colSpan+'"><div class="expand-panel">'+
     '<div class="ep-col">'+
