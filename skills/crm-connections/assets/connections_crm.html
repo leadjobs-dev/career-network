@@ -400,6 +400,11 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
 .score-item .si-val { font-size: 20px; font-weight: 700; color: var(--score-val); }
 .score-item .si-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 1px; }
 .reason-text { font-size: 12px; color: var(--text2); font-style: italic; line-height: 1.5; }
+.msg-wrap { position: relative; margin-top: 4px; }
+.msg-pre { font-size: 12px; color: var(--text2); font-family: inherit; white-space: pre-wrap; line-height: 1.6; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 36px 8px 10px; }
+.msg-copy-btn { position: absolute; top: 6px; right: 6px; padding: 2px 8px; border-radius: 5px; border: 1px solid var(--ftag-border); background: var(--surface); color: var(--text2); cursor: pointer; font-size: 11px; font-family: inherit; transition: all 0.12s; }
+.msg-copy-btn:hover { color: var(--text); border-color: var(--text3); }
+.msg-copy-btn.copied { color: #16a34a; border-color: #16a34a; }
 .all-pos { font-size: 12px; color: var(--text2); line-height: 1.7; }
 
 /* ── Pagination ── */
@@ -587,6 +592,7 @@ function activateTab(idx) {
       var conn = normalizeConn(r.url, entry);
       conn.score = r.score != null ? r.score : r.final_score;  // compat with old format
       conn.reason = r.reason;
+      conn.message = r.message || '';
       return conn;
     });
     setStatus('',''); updateHeader('role'); renderPage();
@@ -964,6 +970,12 @@ function toggleExpand(url, tr, c, type) {
   if (type === 'role' && c.score != null && c.reason) {
     scoreSection = '<div class="lbl">Reasoning</div><div class="reason-text" style="margin-top:4px">'+esc(c.reason)+'</div>';
   }
+  var messageSection = '';
+  if (type === 'role' && c.message) {
+    messageSection = '<div class="lbl" style="margin-top:8px">Message</div>'+
+      '<div class="msg-wrap"><pre class="msg-pre" data-msg="'+esc(c.message)+'">'+esc(c.message)+'</pre>'+
+      '<button class="msg-copy-btn" onclick="copyMsg(this,event)">Copy</button></div>';
+  }
 
   var colSpan = (type === 'role') ? '10' : '6'; var outreach = a.outreach || {};
   var xtr = document.createElement('tr'); xtr.className = 'expand-row';
@@ -976,6 +988,7 @@ function toggleExpand(url, tr, c, type) {
     '</div>'+
     '<div class="ep-col" id="profile-col-'+esc(url)+'">'+
       (scoreSection ? scoreSection+'<div style="margin-top:6px"></div>' : '')+
+      (messageSection ? messageSection+'<div style="margin-top:6px"></div>' : '')+
       '<div class="profile-loading">Loading profile...</div>'+
       '<div class="lbl">Outreach</div>'+
       '<div class="outreach-row"><label class="outreach-toggle"><input type="checkbox"'+(outreach.reached_out?' checked':'')+' onchange="onCheck(this,\''+url+'\')"> Reached out</label>'+
@@ -1108,6 +1121,16 @@ function copyJobUrl(btn, e, jobUrl) {
   navigator.clipboard.writeText(jobUrl).then(function() {
     btn.classList.add('copied'); btn.innerHTML = checkSvg;
     setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = clipSvg; }, 1500);
+  });
+}
+
+function copyMsg(btn, e) {
+  e.stopPropagation();
+  var pre = btn.previousElementSibling;
+  var text = pre ? (pre.dataset.msg || pre.textContent) : '';
+  navigator.clipboard.writeText(text).then(function() {
+    btn.textContent = 'Copied!'; btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
   });
 }
 

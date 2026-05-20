@@ -98,7 +98,77 @@ Set variables (carried over from Step 0):
 
 ---
 
-## Step 2 — Prepare batch files
+## Step 2 — Set up outreach messages
+
+**Before scoring, collect what you need to write personalized messages.** Messages are only generated for score ≥ 6 — the goal is genuine outreach, not spam.
+
+### 2a. Detect language
+
+Check the role location. If the country has a primary language other than English, ask:
+
+> "Would you like the messages in [local language] (e.g. Hebrew for Israel), or English?"
+
+If remote or English-speaking country, skip this — default to English.
+
+### 2b. Collect sender context
+
+Ask in one message:
+
+> 1. **How long have you been at [Company]?** (e.g. "7 months", "2 years")
+> 2. **What's one thing you genuinely love about working there?** Something specific — not PR copy.
+
+Store as `SENDER_TENURE` and `SENDER_LOVE`.
+
+### 2c. Explain options and collect preferences
+
+Explain the two approaches and ask which they prefer:
+
+> **Option A — Generic message (default, recommended):**
+> Short, honest, human-sounding. Same message to everyone with score ≥ 6. Won't feel AI-generated. Tradeoff: not tailored to each person.
+>
+> **Option B — Personalized message:**
+> A unique message per person referencing their specific background. More targeted — but will likely feel AI-generated and will need manual edits from you before sending.
+>
+> Which would you prefer? (Default is A.)
+
+**If Option A:** fill in [Company], [SENDER_TENURE], [SENDER_LOVE] and show the rendered template for approval:
+
+**Default template (Hebrew):**
+```
+מה הולך!
+פתחו אצלינו ב[Company] משרה חדשה:
+[JOB_URL]
+חשבתי אולי יכול להתאים לך :)
+אני פה [SENDER_TENURE] וממש אוהב [SENDER_LOVE]
+אשמח לספר עוד אם זה איכשהו רלוונטי
+```
+
+**Default template (English):**
+```
+Hey!
+We just opened a new role at [Company]:
+[JOB_URL]
+Thought it might be a fit for you :)
+I've been here [SENDER_TENURE] and really love [SENDER_LOVE]
+Happy to share more if it's at all relevant
+```
+
+Adapt phrasing naturally to the chosen language — should feel local, not translated. Ask: "Want to change anything?" and incorporate feedback. Store the final version as `MSG_TEMPLATE` with [JOB_URL] as the only remaining placeholder.
+
+**If Option B:** ask what they'd like included (specific reason, tone, length). Remind them:
+
+> "Personalized messages will reference each person's background — but they'll likely feel AI-generated and will need a personal touch from you before hitting send."
+
+Generate per-person using their instructions as `MSG_CONTEXT`.
+
+**Message rules (both options):**
+- Complete language purity — every word including company name in the chosen language
+- No name in the message
+- No AI fluff: no "AI", "leveraged AI", or anything AI-sounding
+
+---
+
+## Step 3 — Prepare batch files
 
 ```bash
 python skills/rank-connections/scripts/rank_connections.py prepare \
@@ -114,7 +184,7 @@ The script prints counts after each filter. Review — if fewer than ~20 pass th
 
 ---
 
-## Step 3 — Score each batch inline (resumable)
+## Step 4 — Score each batch inline (resumable)
 
 **This is the key step.** Score one batch at a time and write scores to disk immediately — this makes the process resumable if context is compacted mid-run.
 
@@ -126,15 +196,18 @@ Skip any batch that already has a corresponding `_scores_batch_NN.json` file.
 
 **For each unscored batch:**
 1. Read `data/_rank_batches/batch_NN.json`
-2. For every profile, output a single holistic score + reason:
+2. For every profile, output a single holistic score + reason + message:
 
 ```json
 {
   "url": "https://www.linkedin.com/in/...",
   "score": 8,
-  "reason": "one sentence — strongest signal for or against this person"
+  "reason": "one sentence — strongest signal for or against this person",
+  "message": "מה הולך!\nפתחו אצלינו בהאניבוק משרה חדשה:\nhttps://job-url\nחשבתי אולי יכול להתאים לך :)\nאני פה 7 חודשים וממש אוהב [SENDER_LOVE]\nאשמח לספר עוד אם זה איכשהו רלוונטי"
 }
 ```
+
+`message` — **only include if `score >= 6`**. Take `MSG_TEMPLATE` from Step 2 and substitute [JOB_URL]. The message is identical for every person — no per-person tailoring. **Omit the `message` field entirely for score < 6.**
 
 Score 1–10 holistically based on fit for this specific role:
 - **9–10** — exceptional match: requirements, level, and domain all align strongly
@@ -159,7 +232,11 @@ with open('data/_scores_batch_NN.json', 'w', encoding='utf-8') as f:
 print(f'Wrote {len(batch_scores)} scores to data/_scores_batch_NN.json')
 ```
 
-Repeat for every batch. Do not wait until all batches are done.
+**After scoring batch 1 only:** Pause and show the user 3 sample messages from that batch (the top 3 by score). Ask:
+
+> "Here are the first 3 messages. Do they feel right? Anything to adjust before I continue?"
+
+Apply any feedback to `MSG_CONTEXT`, then continue scoring remaining batches without pausing.
 
 **After all batches are scored**, combine into `_scores_tmp.json`:
 
@@ -173,7 +250,7 @@ print(f'Combined {len(all_scores)} scores to data/_scores_tmp.json')
 
 ---
 
-## Step 4 — Merge scores and write output
+## Step 5 — Merge scores and write output
 
 ```bash
 python skills/rank-connections/scripts/rank_connections.py merge \
@@ -207,3 +284,10 @@ Then automatically open the CRM: invoke the crm-connections skill.
 | Re-scoring batches that are already done | Check for existing `_scores_batch_*.json` before starting — skip those batches |
 | Forgetting the combine step | Run the glob combine before merge — `_scores_tmp.json` is built from batch files |
 | URL mismatch in merge | Script strips trailing slashes on both sides |
+| Skipping message setup step | Always do Step 2 before scoring — you need `MSG_TEMPLATE` before batch scoring |
+| Generating messages for score < 6 | Omit `message` field entirely when score < 6 — the goal is not to spam |
+| Tailoring the message per person | The message is identical for everyone — just substitute [JOB_URL]. No per-person reasons |
+| Not pausing after batch 1 | Always pause after batch 1 to show 3 sample messages and get feedback before continuing |
+| Mixing languages in messages | If Hebrew is chosen, every word must be in Hebrew — company names, role names, everything |
+| Starting message with a name | No name — just the casual greeting phrase |
+| Third-person company voice | "פתחו אצלינו" not "[Company] פתחו" — first-person, the sender works there |

@@ -349,9 +349,10 @@ def cmd_merge(args):
         url   = (s.get('url') or '').rstrip('/')
         score = float(s.get('score', 0) or 0)
         rankings.append({
-            'url':    url,
-            'score':  score,
-            'reason': s.get('reason', ''),
+            'url':     url,
+            'score':   score,
+            'reason':  s.get('reason', ''),
+            'message': s.get('message', ''),
         })
 
     rankings.sort(key=lambda x: x['score'], reverse=True)
