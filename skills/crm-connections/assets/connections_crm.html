@@ -267,6 +267,7 @@ td.td-name { min-width: 130px; }
 .name-link:hover { color: #2563eb; }
 .li-icon { display: inline-flex; align-items: center; margin-left: 5px; opacity: 0.3; transition: opacity 0.15s; vertical-align: middle; text-decoration: none; }
 .li-icon:hover { opacity: 1; }
+.li-icon.copied { opacity: 1; }
 .copy-icon { display: inline-flex; align-items: center; margin-left: 4px; opacity: 0.3; transition: opacity 0.15s, color 0.15s; vertical-align: middle; background: none; border: none; cursor: pointer; padding: 0; color: var(--text3); }
 .copy-icon:hover { opacity: 1; color: var(--text2); }
 .copy-icon.copied { opacity: 1; color: #16a34a; }
@@ -457,6 +458,19 @@ tr.expand-row > td { padding: 0; border-bottom: 2px solid var(--expand-border); 
     <button class="ftag"     data-dim="fit" data-v="weak"      onclick="setFilter('fit','weak')">Weak fit</button>
     <button class="ftag"     data-dim="fit" data-v="not_a_fit" onclick="setFilter('fit','not_a_fit')">Not a fit</button>
   </div>
+  <div class="filter-row">
+    <span class="filter-label">Tenure</span>
+    <button class="ftag sel" data-dim="tenure" data-v="all" onclick="setSimpleFilter('tenure','all')">All</button>
+    <button class="ftag" data-dim="tenure" data-v="1" onclick="setSimpleFilter('tenure','1')">1y+</button>
+    <button class="ftag" data-dim="tenure" data-v="2" onclick="setSimpleFilter('tenure','2')">2y+</button>
+    <button class="ftag" data-dim="tenure" data-v="3" onclick="setSimpleFilter('tenure','3')">3y+</button>
+  </div>
+  <div class="filter-row">
+    <span class="filter-label">Outreach</span>
+    <button class="ftag sel" data-dim="outreach" data-v="all" onclick="setSimpleFilter('outreach','all')">All</button>
+    <button class="ftag" data-dim="outreach" data-v="not_contacted" onclick="setSimpleFilter('outreach','not_contacted')">Not contacted</button>
+    <button class="ftag" data-dim="outreach" data-v="contacted" onclick="setSimpleFilter('outreach','contacted')">Contacted</button>
+  </div>
 </div>
 
 <div class="table-wrap">
@@ -481,6 +495,7 @@ var FIT_ORDER  = { strong: 5, good: 4, weak: 3, unset: 2, not_a_fit: 1 };
 // ── State ─────────────────────────────────────────────────────────────────────
 var tabs = []; var activeIdx = -1; var index = {}; var saveTimer = null;
 var famFilter = ['all']; var recFilter = ['all']; var fitFilter = ['all']; var activeSearch = ''; var currentPage = 1; var PAGE_SIZE = 50;
+var tenureFilter = 'all'; var outreachFilter = 'all';
 var sortKey = null; var sortDir = 'desc';
 var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
 var archivedRoles = new Set(JSON.parse(localStorage.getItem('crm_archivedRoles') || '[]'));
@@ -521,8 +536,14 @@ function parseListParam(params, key, allowed) {
 }
 function applyFilterSelections() {
   document.querySelectorAll('.ftag').forEach(function(b) {
-    var arr = b.dataset.dim === 'fam' ? famFilter : b.dataset.dim === 'rec' ? recFilter : fitFilter;
-    b.classList.toggle('sel', arr[0] === 'all' ? b.dataset.v === 'all' : arr.indexOf(b.dataset.v) !== -1);
+    if (b.dataset.dim === 'tenure') {
+      b.classList.toggle('sel', b.dataset.v === tenureFilter);
+    } else if (b.dataset.dim === 'outreach') {
+      b.classList.toggle('sel', b.dataset.v === outreachFilter);
+    } else {
+      var arr = b.dataset.dim === 'fam' ? famFilter : b.dataset.dim === 'rec' ? recFilter : fitFilter;
+      b.classList.toggle('sel', arr[0] === 'all' ? b.dataset.v === 'all' : arr.indexOf(b.dataset.v) !== -1);
+    }
   });
 }
 function getInitialTabIndex() {
@@ -541,6 +562,8 @@ function restoreUrlState() {
   famFilter = parseListParam(params, 'fam', Object.keys(FAM_LABELS));
   recFilter = parseListParam(params, 'rec', Object.keys(REC_LABELS));
   fitFilter = parseListParam(params, 'fit', Object.keys(FIT_LABELS));
+  tenureFilter = ['all','1','2','3'].indexOf(params.get('tenure')) !== -1 ? params.get('tenure') : 'all';
+  outreachFilter = ['all','not_contacted','contacted'].indexOf(params.get('outreach')) !== -1 ? params.get('outreach') : 'all';
   activeSearch = params.get('q') || '';
   document.getElementById('search').value = activeSearch;
   currentPage = Math.max(1, parseInt(params.get('page') || '1', 10) || 1);
@@ -557,6 +580,8 @@ function syncUrlState() {
   if (famFilter[0] !== 'all') params.set('fam', famFilter.join(','));
   if (recFilter[0] !== 'all') params.set('rec', recFilter.join(','));
   if (fitFilter[0] !== 'all') params.set('fit', fitFilter.join(','));
+  if (tenureFilter !== 'all') params.set('tenure', tenureFilter);
+  if (outreachFilter !== 'all') params.set('outreach', outreachFilter);
   if (activeSearch) params.set('q', activeSearch);
   if (currentPage > 1) params.set('page', String(currentPage));
   if (sortKey) { params.set('sort', sortKey); params.set('dir', sortDir); }
@@ -608,6 +633,7 @@ function activateTab(idx, restoreFromUrl) {
     famFilter.length = 0; famFilter.push('all');
     recFilter.length = 0; recFilter.push('all');
     fitFilter.length = 0; fitFilter.push('all');
+    tenureFilter = 'all'; outreachFilter = 'all';
     activeSearch = ''; currentPage = 1; sortKey = null; sortDir = 'desc';
     document.getElementById('search').value = '';
     applyFilterSelections();
@@ -908,6 +934,15 @@ function getFiltered() {
       var ra = getRoleAnn(c.url, tab.filename);
       if (fitFilter.indexOf(ra.fit || 'unset') === -1) return false;
     }
+    if (tenureFilter !== 'all') {
+      var tenureYears = tenureToYears(c.tenureInRole);
+      if (tenureYears < parseFloat(tenureFilter)) return false;
+    }
+    if (outreachFilter !== 'all') {
+      var contacted = !!(a.outreach && a.outreach.reached_out);
+      if (outreachFilter === 'not_contacted' && contacted) return false;
+      if (outreachFilter === 'contacted' && !contacted) return false;
+    }
     if (!q) return true;
     var hay = (c._name + ' ' + (c.headline||'') + ' ' + (c.currentTitle||'') + ' ' + (c.currentCompany||'')).toLowerCase();
     return hay.indexOf(q) !== -1;
@@ -941,7 +976,7 @@ function renderPage() {
       var url = c.url; var a = getAnn(url);
       var fam = a.familiarity || 'not_familiar'; var rec = a.recommendation || 'na';
       var tr = document.createElement('tr'); tr.className = 'data-row'; tr.dataset.url = url;
-      var liIcon = url ? '<a class="li-icon" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()" title="Open LinkedIn profile"><svg width="13" height="13" viewBox="0 0 24 24" fill="#0A66C2"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg></a>' : '';
+      var liIcon = url ? '<a class="li-icon" href="'+esc(url)+'" target="_blank" data-msg="'+esc(c.message||'')+'" onclick="openLinkedInAndCopy(this,event)" title="'+(c.message ? 'Copy message and open LinkedIn profile' : 'Open LinkedIn profile')+'"><svg width="13" height="13" viewBox="0 0 24 24" fill="#0A66C2"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg></a>' : '';
       var tabJobUrl = (type === 'role') ? (tabs[activeIdx].jobUrl || '') : '';
       var copyIcon = tabJobUrl ? '<button class="copy-icon" onclick="copyJobUrl(this,event,\''+esc(tabJobUrl)+'\')" title="Copy job URL"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : '';
       var msgCopyIcon = (type === 'role' && c.message) ? '<button class="copy-icon" data-msg="'+esc(c.message)+'" onclick="copyMsgText(this,event)" title="Copy message"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></button>' : '';
@@ -1152,7 +1187,7 @@ function onField(el, url, field) {
   if (field === 'outcome') { if (!entry.outreach) entry.outreach={}; entry.outreach.outcome = el.value; }
   scheduleSave();
 }
-function onCheck(el, url) { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.reached_out = el.checked; scheduleSave(); updateContactedBadge(url); }
+function onCheck(el, url) { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.reached_out = el.checked; scheduleSave(); updateContactedBadge(url); updateChips(); }
 function onDate(el, url)  { var entry = ensureEntry(url); if (!entry.outreach) entry.outreach={}; entry.outreach.date = el.value; scheduleSave(); updateContactedBadge(url); }
 
 function setFilter(dim, v) {
@@ -1168,6 +1203,15 @@ function setFilter(dim, v) {
   document.querySelectorAll('.ftag[data-dim="'+dim+'"]').forEach(function(b) {
     b.classList.toggle('sel', arr[0] === 'all' ? b.dataset.v === 'all' : arr.indexOf(b.dataset.v) !== -1);
   });
+  renderPage();
+  syncUrlState();
+}
+
+function setSimpleFilter(dim, v) {
+  if (dim === 'tenure') tenureFilter = v;
+  if (dim === 'outreach') outreachFilter = v;
+  currentPage = 1;
+  applyFilterSelections();
   renderPage();
   syncUrlState();
 }
@@ -1211,9 +1255,30 @@ function copyMsgText(btn, e) {
   });
 }
 
-function copyTextToClipboard(text, onCopied) {
+function openLinkedInAndCopy(link, e) {
+  e.stopPropagation();
+  e.preventDefault();
+  var msg = link.dataset.msg || '';
+  var href = link.href;
+  function openProfile() {
+    window.open(href, '_blank', 'noopener');
+  }
+  if (!msg) {
+    openProfile();
+    return;
+  }
+  copyTextToClipboard(msg, function() {
+    link.classList.add('copied');
+    setTimeout(function() { link.classList.remove('copied'); }, 1500);
+    openProfile();
+  }, openProfile);
+}
+
+function copyTextToClipboard(text, onCopied, onFailed) {
   navigator.clipboard.writeText(text).then(function() {
     if (onCopied) onCopied();
+  }).catch(function() {
+    if (onFailed) onFailed();
   });
 }
 
@@ -1244,6 +1309,7 @@ function setToday(btn, url) {
   entry.outreach.date = today;
   scheduleSave();
   updateContactedBadge(url);
+  updateChips();
 }
 function markContactedToday(btn, e, url) {
   e.stopPropagation();
@@ -1253,12 +1319,17 @@ function markContactedToday(btn, e, url) {
   entry.outreach.date = todayStr();
   scheduleSave();
   updateContactedBadge(url);
+  updateChips();
   btn.classList.add('done');
   if (expandedUrl === url && expandedTr) {
     var checkbox = expandedTr.querySelector('.outreach-toggle input[type="checkbox"]');
     var dateInput = expandedTr.querySelector('.date-input');
     if (checkbox) checkbox.checked = true;
     if (dateInput) dateInput.value = entry.outreach.date;
+  }
+  if (outreachFilter !== 'all') {
+    renderPage();
+    syncUrlState();
   }
 }
 function updateContactedBadge(url) {

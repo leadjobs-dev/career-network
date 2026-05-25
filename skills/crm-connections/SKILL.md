@@ -33,6 +33,9 @@ Tell the user:
 - Role tabs auto-discovered from `ranked_*.json` files in the project folder
 - Annotations auto-save to `connections_index.json` on every change
 - Expanding a row lazy-loads full profile from `profiles/{handle}.json`
+- Clicking the LinkedIn icon copies the prepared message, when present, and opens the profile
+- The inline check button marks a candidate as contacted today without expanding the row
+- URL params preserve selected role, filters, search, sort, and page across refreshes
 
 ---
 
@@ -42,15 +45,34 @@ Tell the user:
 |---|---|
 | **Tabs** | Network tab always present (from index). Role tabs auto-discovered from `ranked_*.json` files. |
 | **Network tab** | Sourced from `connections_index.json` at boot. Columns: name, position, location, familiarity, recommendation |
-| **Role tab** | Loads `ranked_*.json`, merges with index for display. Columns: rank, name, position, score, req., seniority, domain, role fit, familiarity, recommendation |
+| **Role tab** | Loads `ranked_*.json`, merges with index for display. Columns: rank, name, position, score, tenure, connected age, role fit, familiarity, recommendation |
 | **Sorting** | Click any column header to sort. First click = highest first for scores and categorical fields (fit, familiarity, recommendation); A→Z for name. Click again to reverse. |
 | **Inline editing** | Familiarity, recommendation, and role fit can be set directly in the table row without expanding |
+| **LinkedIn icon** | Opens the LinkedIn profile. If the row has a prepared `message`, it copies that message to the clipboard first. |
+| **Mark contacted today** | The inline check button sets `outreach.reached_out = true` and `outreach.date = today` without expanding the row. |
 | **Expand a row** | Click any row — shows full annotation pills, score breakdown (role tabs), notes, role notes, outreach tracking. Profile (positions, about) lazy-fetched from `profiles/{handle}.json` |
-| **Filter** | Two filter rows: familiarity + recommendation |
+| **Filter** | Filter rows: familiarity, recommendation, role fit, tenure, and outreach status |
+| **Tenure filter** | `1y+`, `2y+`, and `3y+` hide people below that current-company tenure. |
+| **Outreach filter** | `Not contacted` hides candidates already marked reached out; `Contacted` shows only reached-out candidates. |
+| **URL state** | Selected tab/role, filters, search, sort, and page are stored in URL params and restored on refresh. |
 | **Search** | Live search across name, headline, position |
 | **Save** | Automatic, 0.6s debounce, POSTs to `/index` endpoint, saves to `connections_index.json` |
 | **Tab label** | Derived from `_meta.roleName` in ranked JSON, falls back to filename date |
 | **Dark mode** | Toggle via moon button in topbar |
+
+Useful URL params:
+
+| Param | Meaning | Example |
+|---|---|---|
+| `tab` | Selected tab. Use `network` or a ranked filename. | `tab=ranked_seniorfullstackengin_20260523.json` |
+| `fam` | Familiarity filter, comma-separated. | `fam=worked_together,very_close` |
+| `rec` | Recommendation filter, comma-separated. | `rec=would_work_with,strongly_recommend` |
+| `fit` | Role fit filter, comma-separated. | `fit=unset,good,strong` |
+| `tenure` | Minimum current-company tenure in years. | `tenure=1` |
+| `outreach` | Outreach status filter. | `outreach=not_contacted` |
+| `q` | Search query. | `q=react` |
+| `sort`, `dir` | Sort key and direction. | `sort=tenure&dir=desc` |
+| `page` | Current page. | `page=2` |
 
 ---
 

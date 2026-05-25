@@ -3,7 +3,7 @@
     python skills/crm-connections/scripts/crm_server.py
 Data files are read from data/ if that folder exists, otherwise from the
 current working directory (backward-compatible with pre-data/ setups)."""
-import http.server, json, os, re, threading, webbrowser
+import http.server, json, os, re, threading, urllib.parse, webbrowser
 
 PORT        = 8765
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,10 +21,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
     def do_GET(self):
-        if self.path in ('/', '/index.html'):
+        path = urllib.parse.urlsplit(self.path).path
+        if path in ('/', '/index.html'):
             self._file(HTML_FILE, 'text/html')
 
-        elif self.path == '/index':
+        elif path == '/index':
             data = {}
             try:
                 with open(INDEX_FILE, encoding='utf-8') as f:
@@ -33,18 +34,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 pass
             self._json(data)
 
-        elif self.path == '/manifest':
+        elif path == '/manifest':
             self._json(self._scan())
 
-        elif self.path.startswith('/profiles/'):
-            handle = self.path[len('/profiles/'):]
+        elif path.startswith('/profiles/'):
+            handle = path[len('/profiles/'):]
             # Security: allow only safe handles, no path traversal
             if not HANDLE_RE.match(handle) or '..' in handle:
                 self.send_response(403); self.end_headers(); return
             self._file(os.path.join(PROFILES_DIR, f'{handle}.json'), 'application/json')
 
-        elif self.path.startswith('/data/'):
-            fn = self.path[6:]
+        elif path.startswith('/data/'):
+            fn = path[6:]
             if not RANKED_RE.match(fn) or '..' in fn:
                 self.send_response(403); self.end_headers(); return
             self._file(os.path.join(_DATA_DIR, fn), 'application/json')
@@ -53,7 +54,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(404); self.end_headers()
 
     def do_POST(self):
-        if self.path == '/index':
+        path = urllib.parse.urlsplit(self.path).path
+        if path == '/index':
             n    = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(n)
             try:

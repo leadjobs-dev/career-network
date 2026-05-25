@@ -75,6 +75,25 @@ Claude scores every relevant connection against the job requirements and opens t
 
 ---
 
+## Using the CRM
+
+The CRM is built for fast outreach review:
+
+- Click the **LinkedIn icon** next to a candidate to copy their prepared message and open their LinkedIn profile.
+- Click the small **check button** next to a candidate to mark them as contacted today without expanding the row.
+- Use **Role fit**, **Familiarity**, and **Recommendation** chips inline as you review.
+- Use **Tenure** filters to hide people who have been at their current company for less than 1, 2, or 3 years.
+- Use **Outreach -> Not contacted** to hide people you've already contacted.
+- Filters, search, sort, page, and selected role are stored in the URL, so refreshes and shared links reopen the same view.
+
+Example:
+
+```
+http://localhost:8765/?tab=ranked_seniorfullstackengin_20260523.json&fit=unset&tenure=1&outreach=not_contacted
+```
+
+---
+
 ## Subsequent runs
 
 Already enriched your connections before? Use the same phrase — Claude skips to ranking and preserves all your notes.
