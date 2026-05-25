@@ -102,10 +102,105 @@ def get_current_title_company(profile):
     return '', ''
 
 
+def _duration_months(duration):
+    """Parse common LinkedIn duration strings to months for comparison."""
+    if not duration:
+        return 0
+    text = str(duration).lower()
+    years = 0
+    months = 0
+    y = re.search(r'(\d+)\s*(?:y|yr|yrs|year|years)', text)
+    m = re.search(r'(\d+)\s*(?:m|mo|mos|month|months)', text)
+    if y:
+        years = int(y.group(1))
+    if m:
+        months = int(m.group(1))
+    return years * 12 + months
+
+
+def _date_to_month_index(value, default_present=False):
+    """Convert Apify date dicts like {'month': 'Oct', 'year': 2024} to a month index."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        if default_present and value.lower() == 'present':
+            today = date.today()
+            return today.year * 12 + today.month
+        return None
+    text = (value.get('text') or '').lower()
+    if default_present and text == 'present':
+        today = date.today()
+        return today.year * 12 + today.month
+    year = value.get('year')
+    if not year:
+        return None
+    months = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    }
+    month = value.get('month')
+    if isinstance(month, str):
+        month = months.get(month[:3].lower(), 1)
+    month = int(month or 1)
+    return int(year) * 12 + month
+
+
+def _format_duration_months(total_months):
+    if total_months <= 0:
+        return ''
+    years, months = divmod(total_months, 12)
+    parts = []
+    if years:
+        parts.append(f'{years} yr' + ('' if years == 1 else 's'))
+    if months:
+        parts.append(f'{months} mo' + ('' if months == 1 else 's'))
+    return ' '.join(parts)
+
+
 def get_tenure_in_role(profile):
-    """Return duration string for current role, e.g. '3y 1m'. Empty string if missing."""
+    """
+    Return tenure at the current company, not only in the current title.
+
+    The field name is kept for compatibility with the CRM, but the intended
+    meaning is current-company tenure so role tabs can estimate mobility.
+    """
     pos = profile.get('currentPosition') or []
-    return pos[0].get('duration') or '' if pos else ''
+    if not pos:
+        return ''
+    current_company = (pos[0].get('companyName') or '').strip().lower()
+    if not current_company:
+        return pos[0].get('duration') or ''
+
+    ranges = []
+    fallback_durations = []
+    seen_fallbacks = set()
+    for p in list(pos) + list(profile.get('experience') or []):
+        company = (p.get('companyName') or '').strip().lower()
+        duration = p.get('duration') or ''
+        if company != current_company:
+            continue
+        start = _date_to_month_index(p.get('startDate'))
+        end = _date_to_month_index(p.get('endDate'), default_present=True)
+        if start and end:
+            ranges.append((start, end))
+        elif duration:
+            fallback_key = (
+                (p.get('title') or p.get('position') or '').strip().lower(),
+                company,
+                duration,
+            )
+            if fallback_key in seen_fallbacks:
+                continue
+            seen_fallbacks.add(fallback_key)
+            fallback_durations.append(duration)
+
+    if ranges:
+        start = min(r[0] for r in ranges)
+        end = max(r[1] for r in ranges)
+        return _format_duration_months(end - start) or pos[0].get('duration') or ''
+    if not fallback_durations:
+        return pos[0].get('duration') or ''
+    return _format_duration_months(sum(_duration_months(d) for d in fallback_durations)) or pos[0].get('duration') or ''
 
 
 def get_location_text(profile):

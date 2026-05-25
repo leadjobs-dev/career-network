@@ -123,19 +123,19 @@ Store as `SENDER_TENURE` and `SENDER_LOVE`.
 
 Explain the two approaches and ask which they prefer:
 
-> **Option A — Generic message (default, recommended):**
-> Short, honest, human-sounding. Same message to everyone with score ≥ 6. Won't feel AI-generated. Tradeoff: not tailored to each person.
+> **Option A — Standard message (default, recommended):**
+> Short, honest, human-sounding. Same message body for everyone with score ≥ 6, with only the first-name greeting personalized. Won't feel AI-generated. Tradeoff: not tailored to each person's background.
 >
 > **Option B — Personalized message:**
 > A unique message per person referencing their specific background. More targeted — but will likely feel AI-generated and will need manual edits from you before sending.
 >
 > Which would you prefer? (Default is A.)
 
-**If Option A:** fill in [Company], [SENDER_TENURE], [SENDER_LOVE] and show the rendered template for approval:
+**If Option A:** fill in [Company], [SENDER_TENURE], [SENDER_LOVE] and show the rendered template for approval. The first line uses `[FIRST_NAME_HEBREW]` for Hebrew or `[FIRST_NAME]` for English; replace it per candidate during scoring.
 
 **Default template (Hebrew):**
 ```
-מה הולך!
+מה נשמע [FIRST_NAME_HEBREW]!
 פתחו אצלינו ב[Company] משרה חדשה:
 [JOB_URL]
 חשבתי אולי יכול להתאים לך :)
@@ -145,7 +145,7 @@ Explain the two approaches and ask which they prefer:
 
 **Default template (English):**
 ```
-Hey!
+Hey [FIRST_NAME]!
 We just opened a new role at [Company]:
 [JOB_URL]
 Thought it might be a fit for you :)
@@ -153,7 +153,7 @@ I've been here [SENDER_TENURE] and really love [SENDER_LOVE]
 Happy to share more if it's at all relevant
 ```
 
-Adapt phrasing naturally to the chosen language — should feel local, not translated. Ask: "Want to change anything?" and incorporate feedback. Store the final version as `MSG_TEMPLATE` with [JOB_URL] as the only remaining placeholder.
+Adapt phrasing naturally to the chosen language — should feel local, not translated. Ask: "Want to change anything?" and incorporate feedback. Store the final version as `MSG_TEMPLATE` with `[JOB_URL]` and the first-name placeholder as the only remaining placeholders.
 
 **If Option B:** ask what they'd like included (specific reason, tone, length). Remind them:
 
@@ -163,7 +163,8 @@ Generate per-person using their instructions as `MSG_CONTEXT`.
 
 **Message rules (both options):**
 - Complete language purity — every word including company name in the chosen language
-- No name in the message
+- Standard/default messages may personalize only the greeting first name; do not tailor the body per person
+- For Hebrew, convert the candidate's first name to Hebrew letters in the first line: `מה נשמע [FIRST_NAME_HEBREW]!`
 - No AI fluff: no "AI", "leveraged AI", or anything AI-sounding
 
 ---
@@ -203,11 +204,11 @@ Skip any batch that already has a corresponding `_scores_batch_NN.json` file.
   "url": "https://www.linkedin.com/in/...",
   "score": 8,
   "reason": "one sentence — strongest signal for or against this person",
-  "message": "מה הולך!\nפתחו אצלינו בהאניבוק משרה חדשה:\nhttps://job-url\nחשבתי אולי יכול להתאים לך :)\nאני פה 7 חודשים וממש אוהב [SENDER_LOVE]\nאשמח לספר עוד אם זה איכשהו רלוונטי"
+  "message": "מה נשמע רותי!\nפתחו אצלינו בהאניבוק משרה חדשה:\nhttps://job-url\nחשבתי אולי יכול להתאים לך :)\nאני פה 7 חודשים וממש אוהב [SENDER_LOVE]\nאשמח לספר עוד אם זה איכשהו רלוונטי"
 }
 ```
 
-`message` — **only include if `score >= 6`**. Take `MSG_TEMPLATE` from Step 2 and substitute [JOB_URL]. The message is identical for every person — no per-person tailoring. **Omit the `message` field entirely for score < 6.**
+`message` — **only include if `score >= 6`**. Take `MSG_TEMPLATE` from Step 2 and substitute `[JOB_URL]` plus the candidate's first-name placeholder. The body must be identical for every person — no per-person tailoring beyond the greeting. **Omit the `message` field entirely for score < 6.**
 
 Score 1–10 holistically based on fit for this specific role:
 - **9–10** — exceptional match: requirements, level, and domain all align strongly
@@ -263,6 +264,44 @@ Sorts by score, writes `ranked_{slug}_{date}.json`, prints top 10, and cleans up
 
 ---
 
+## Regenerate outreach messages only
+
+Use this flow when the user likes an existing ranking but wants to change the outreach copy.
+
+**Do not rerun coverage, enrichment, prepare, scoring, or merge.** The existing `ranked_*.json` file is the source of truth. Only update the `message` fields.
+
+### Message-only steps
+
+1. Identify the ranked file to update. If ambiguous, ask which role/file.
+2. Read the ranked file and confirm it has `_meta.jobUrl`, `_meta.roleName`, and `rankings`.
+3. Collect only the missing message inputs:
+   - language (for non-English locations, ask local language vs English)
+   - `SENDER_TENURE`
+   - `SENDER_LOVE`
+   - requested wording change
+   - standard vs personalized (default: standard)
+4. Generate the message in-session, following Step 2 message rules.
+5. Show the rendered message for approval before editing the file.
+   - Standard mode: show 3 examples using candidate first names so the user can approve the greeting and body.
+   - Personalized mode: show 3 examples and remind the user they need manual review.
+6. After approval, edit the ranked JSON directly:
+   - preserve ranking order, URLs, scores, reasons, role metadata, and job URL
+   - standard mode: set the same message body for every ranking with `score >= 6`, changing only the first-name greeting
+   - remove `message` for every ranking with `score < 6`
+   - personalized mode: update only the `message` fields; do not change scores or reasons
+   - optionally add `_meta.messagePolicy` with mode, language, min score, and update date
+7. Validate before final response:
+   - every standard-mode message starts with the approved first-name greeting pattern
+   - standard mode changes only the first line per person; the rest of the message body is identical
+   - no ranking below score 6 has a message
+   - `[JOB_URL]` has been replaced
+   - message has no AI-sounding wording
+   - language is pure according to the chosen language
+
+If the user requests another wording change after seeing the CRM, repeat this section only.
+
+---
+
 ## Done
 
 Tell the user:
@@ -286,8 +325,11 @@ Then automatically open the CRM: invoke the crm-connections skill.
 | URL mismatch in merge | Script strips trailing slashes on both sides |
 | Skipping message setup step | Always do Step 2 before scoring — you need `MSG_TEMPLATE` before batch scoring |
 | Generating messages for score < 6 | Omit `message` field entirely when score < 6 — the goal is not to spam |
-| Tailoring the message per person | The message is identical for everyone — just substitute [JOB_URL]. No per-person reasons |
+| Tailoring the standard message per person | Standard mode only personalizes the first-name greeting and substitutes `[JOB_URL]`; no per-person reasons or background references |
 | Not pausing after batch 1 | Always pause after batch 1 to show 3 sample messages and get feedback before continuing |
 | Mixing languages in messages | If Hebrew is chosen, every word must be in Hebrew — company names, role names, everything |
-| Starting message with a name | No name — just the casual greeting phrase |
+| Leaving first names in English for Hebrew messages | Convert first names to Hebrew letters in the greeting: `מה נשמע רותי!` |
 | Third-person company voice | "פתחו אצלינו" not "[Company] פתחו" — first-person, the sender works there |
+| Reranking just to change messages | Use "Regenerate outreach messages only" — do not change scores, reasons, order, URLs, or metadata |
+| Editing messages before approval | Show the exact rendered message first, then update the ranked file only after the user approves |
+| Personalizing standard messages | Standard mode means one identical body for everyone with score >= 6; only the greeting first name changes |

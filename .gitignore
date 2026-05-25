@@ -7,6 +7,7 @@ __pycache__/
 # Skill temp files
 _rank_batches/
 _scores_tmp.json
+skills/*.zip
 
 # Personal data — stays local in data/, never committed
 data/

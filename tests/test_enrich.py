@@ -76,9 +76,38 @@ def test_get_current_title_company_empty():
     assert company == ''
 
 # --- get_tenure_in_role ---
-def test_get_tenure_in_role():
+def test_get_tenure_in_role_current_position_only():
     profile = {'currentPosition': [{'duration': '3y 1m'}]}
     assert get_tenure_in_role(profile) == '3y 1m'
+
+def test_get_tenure_in_role_current_company_not_title():
+    profile = {
+        'currentPosition': [{
+            'title': 'Staff Engineer',
+            'companyName': 'Wix',
+            'duration': '1 yr 2 mos',
+            'startDate': {'month': 'Mar', 'year': 2025},
+            'endDate': {'text': 'Present'},
+        }],
+        'experience': [
+            {
+                'title': 'Staff Engineer',
+                'companyName': 'Wix',
+                'duration': '1 yr 2 mos',
+                'startDate': {'month': 'Mar', 'year': 2025},
+                'endDate': {'text': 'Present'},
+            },
+            {
+                'title': 'Senior Engineer',
+                'companyName': 'Wix',
+                'duration': '4 yrs 6 mos',
+                'startDate': {'month': 'Sep', 'year': 2020},
+                'endDate': {'month': 'Mar', 'year': 2025},
+            },
+            {'title': 'Engineer', 'companyName': 'OtherCo', 'duration': '7y'},
+        ],
+    }
+    assert get_tenure_in_role(profile) == '5 yrs 8 mos'
 
 def test_get_tenure_in_role_empty():
     assert get_tenure_in_role({}) == ''

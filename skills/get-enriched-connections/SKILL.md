@@ -133,6 +133,8 @@ The script will:
 6. Write new per-profile files to `data/profiles/`
 7. Delete `_apify_run.json` on success
 
+**Tenure field semantics:** `tenureInRole` is kept as the CRM/index field name for compatibility, but it must represent tenure at the current company, not only the latest title at that company. When a profile has multiple current-company entries, use the longest duration for the current company so the CRM can estimate who may be more open to moving.
+
 ---
 
 ## Verify

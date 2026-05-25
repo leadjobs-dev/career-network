@@ -270,6 +270,10 @@ td.td-name { min-width: 130px; }
 .copy-icon { display: inline-flex; align-items: center; margin-left: 4px; opacity: 0.3; transition: opacity 0.15s, color 0.15s; vertical-align: middle; background: none; border: none; cursor: pointer; padding: 0; color: var(--text3); }
 .copy-icon:hover { opacity: 1; color: var(--text2); }
 .copy-icon.copied { opacity: 1; color: #16a34a; }
+.contact-today-btn { display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; width: 17px; height: 17px; border-radius: 50%; border: 1px solid var(--ftag-border); background: transparent; color: var(--text3); cursor: pointer; opacity: 0.35; transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s; vertical-align: middle; }
+.contact-today-btn:hover { opacity: 1; color: #15803d; border-color: #86efac; background: #dcfce7; }
+.contact-today-btn.done { opacity: 1; color: #16a34a; border-color: #16a34a; background: rgba(22,163,74,0.08); }
+[data-theme="dark"] .contact-today-btn:hover { background: rgba(21,128,61,0.2); border-color: #15803d; }
 td.td-pos .pos-main { color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; font-size: 13px; }
 td.td-pos .pos-sub  { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; margin-top: 1px; }
 td.td-score { text-align: center; }
@@ -481,6 +485,7 @@ var sortKey = null; var sortDir = 'desc';
 var expandedTr = null; var expandedDataRow = null; var expandedUrl = null;
 var archivedRoles = new Set(JSON.parse(localStorage.getItem('crm_archivedRoles') || '[]'));
 var archDropdown = null;
+var restoringUrlState = false;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 Promise.all([
@@ -502,11 +507,63 @@ Promise.all([
     document.getElementById('tbody').innerHTML = '<tr><td colspan="10"><div class="empty-state"><h2>No data</h2><p>Run get-enriched-connections to build connections_index.json</p></div></td></tr>';
     setStatus('No index file','error'); return;
   }
-  buildTabs(); activateTab(0);
+  buildTabs(); activateTab(getInitialTabIndex(), true);
 }).catch(function(){ setStatus('Server not responding','error'); });
 
 // ── Tab rendering ─────────────────────────────────────────────────────────────
 var ARCH_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
+
+function parseListParam(params, key, allowed) {
+  var raw = params.get(key);
+  if (!raw) return ['all'];
+  var vals = raw.split(',').filter(function(v){ return allowed.indexOf(v) !== -1; });
+  return vals.length ? vals : ['all'];
+}
+function applyFilterSelections() {
+  document.querySelectorAll('.ftag').forEach(function(b) {
+    var arr = b.dataset.dim === 'fam' ? famFilter : b.dataset.dim === 'rec' ? recFilter : fitFilter;
+    b.classList.toggle('sel', arr[0] === 'all' ? b.dataset.v === 'all' : arr.indexOf(b.dataset.v) !== -1);
+  });
+}
+function getInitialTabIndex() {
+  var params = new URLSearchParams(window.location.search);
+  var wanted = params.get('tab');
+  if (!wanted) return 0;
+  for (var i = 0; i < tabs.length; i++) {
+    var tab = tabs[i];
+    if (wanted === 'network' && tab.type === 'network') return i;
+    if (wanted === String(i) || wanted === tab.filename || wanted === tab.label) return i;
+  }
+  return 0;
+}
+function restoreUrlState() {
+  var params = new URLSearchParams(window.location.search);
+  famFilter = parseListParam(params, 'fam', Object.keys(FAM_LABELS));
+  recFilter = parseListParam(params, 'rec', Object.keys(REC_LABELS));
+  fitFilter = parseListParam(params, 'fit', Object.keys(FIT_LABELS));
+  activeSearch = params.get('q') || '';
+  document.getElementById('search').value = activeSearch;
+  currentPage = Math.max(1, parseInt(params.get('page') || '1', 10) || 1);
+  sortKey = params.get('sort') || null;
+  if (['score','tenure','connected','name','fit','fam','rec'].indexOf(sortKey) === -1) sortKey = null;
+  sortDir = params.get('dir') === 'asc' ? 'asc' : 'desc';
+  applyFilterSelections();
+}
+function syncUrlState() {
+  if (restoringUrlState) return;
+  var params = new URLSearchParams();
+  var tab = tabs[activeIdx];
+  if (tab) params.set('tab', tab.type === 'role' ? tab.filename : 'network');
+  if (famFilter[0] !== 'all') params.set('fam', famFilter.join(','));
+  if (recFilter[0] !== 'all') params.set('rec', recFilter.join(','));
+  if (fitFilter[0] !== 'all') params.set('fit', fitFilter.join(','));
+  if (activeSearch) params.set('q', activeSearch);
+  if (currentPage > 1) params.set('page', String(currentPage));
+  if (sortKey) { params.set('sort', sortKey); params.set('dir', sortDir); }
+  var qs = params.toString();
+  var next = window.location.pathname + (qs ? '?' + qs : '');
+  window.history.replaceState(null, '', next);
+}
 
 function buildTabs() {
   var el = document.getElementById('tabs'); el.innerHTML = ''; var lastType = null;
@@ -542,25 +599,30 @@ function buildTabs() {
   }
 }
 
-function activateTab(idx) {
+function activateTab(idx, restoreFromUrl) {
   activeIdx = idx;
-  famFilter.length = 0; famFilter.push('all');
-  recFilter.length = 0; recFilter.push('all');
-  fitFilter.length = 0; fitFilter.push('all');
-  activeSearch = ''; currentPage = 1; sortKey = null; sortDir = 'desc';
-  document.getElementById('search').value = '';
-  document.querySelectorAll('.ftag').forEach(function(b){ b.classList.toggle('sel', b.dataset.v === 'all'); });
+  restoringUrlState = !!restoreFromUrl;
+  if (restoreFromUrl) {
+    restoreUrlState();
+  } else {
+    famFilter.length = 0; famFilter.push('all');
+    recFilter.length = 0; recFilter.push('all');
+    fitFilter.length = 0; fitFilter.push('all');
+    activeSearch = ''; currentPage = 1; sortKey = null; sortDir = 'desc';
+    document.getElementById('search').value = '';
+    applyFilterSelections();
+  }
   buildTabs();
   var tab = tabs[idx];
   var fitRow = document.getElementById('fit-filter-row');
   if (fitRow) fitRow.style.display = (tab && tab.type === 'role') ? '' : 'none';
-  if (tab.data) { updateHeader(tab.type); renderPage(); return; }
+  if (tab.data) { updateHeader(tab.type); renderPage(); restoringUrlState = false; syncUrlState(); return; }
   if (tab.type === 'network') {
     // Load All Connections from index
     tab.data = Object.entries(index)
       .filter(function(kv){ return kv[0] !== '_meta'; })
       .map(function(kv){ return normalizeConn(kv[0], kv[1]); });
-    updateHeader('network'); renderPage(); return;
+    updateHeader('network'); renderPage(); restoringUrlState = false; syncUrlState(); return;
   }
   // Role tab — load ranked file
   document.getElementById('tbody').innerHTML = '<tr class="loading-row"><td colspan="10">Loading ' + esc(tab.label) + '...</td></tr>';
@@ -595,7 +657,7 @@ function activateTab(idx) {
       conn.message = r.message || '';
       return conn;
     });
-    setStatus('',''); updateHeader('role'); renderPage();
+    setStatus('',''); updateHeader('role'); renderPage(); restoringUrlState = false; syncUrlState();
   }).catch(function(){ setStatus('Failed to load ' + tab.filename,'error'); });
 }
 
@@ -810,6 +872,7 @@ function setSort(key) {
   currentPage = 1;
   var tab = tabs[activeIdx]; if (tab) updateHeader(tab.type);
   renderPage();
+  syncUrlState();
 }
 
 function tenureToYears(s) {
@@ -881,10 +944,13 @@ function renderPage() {
       var liIcon = url ? '<a class="li-icon" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()" title="Open LinkedIn profile"><svg width="13" height="13" viewBox="0 0 24 24" fill="#0A66C2"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg></a>' : '';
       var tabJobUrl = (type === 'role') ? (tabs[activeIdx].jobUrl || '') : '';
       var copyIcon = tabJobUrl ? '<button class="copy-icon" onclick="copyJobUrl(this,event,\''+esc(tabJobUrl)+'\')" title="Copy job URL"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : '';
+      var msgCopyIcon = (type === 'role' && c.message) ? '<button class="copy-icon" data-msg="'+esc(c.message)+'" onclick="copyMsgText(this,event)" title="Copy message"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H7l-4 4V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg></button>' : '';
       var outreachData = getAnn(url).outreach || {};
       var contactedText = (outreachData.reached_out && outreachData.date) ? formatContactDate(outreachData.date) : '';
+      var contactedToday = outreachData.reached_out && outreachData.date === todayStr();
+      var contactTodayBtn = '<button class="contact-today-btn'+(contactedToday?' done':'')+'" onclick="markContactedToday(this,event,\''+esc(url)+'\')" title="Mark contacted today"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></button>';
       var contactedBadge = '<span class="contacted-badge" data-contact-badge="'+esc(url)+'"'+(contactedText?'':' style="display:none"')+'>'+esc(contactedText)+'</span>';
-      var nameCell = (url ? '<a class="name-link" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()">'+esc(c._name)+'</a>' : esc(c._name)) + liIcon + copyIcon + contactedBadge;
+      var nameCell = (url ? '<a class="name-link" href="'+esc(url)+'" target="_blank" onclick="event.stopPropagation()">'+esc(c._name)+'</a>' : esc(c._name)) + liIcon + copyIcon + msgCopyIcon + contactTodayBtn + contactedBadge;
       var pos1 = c.currentTitle && c.currentCompany ? c.currentTitle + ' at ' + c.currentCompany : (c.currentTitle || c.currentCompany || c.headline || '');
       var pos2 = (type === 'role') ? '' : (c.tenureInRole || '');
       var posCell = (pos1 ? '<div class="pos-main">'+esc(pos1)+'</div>' : '') + (pos2 ? '<div class="pos-sub">'+esc(pos2)+'</div>' : '');
@@ -918,7 +984,7 @@ function renderPage() {
   updateChips();
 }
 
-function goPage(n){ currentPage = n; renderPage(); window.scrollTo(0,0); }
+function goPage(n){ currentPage = n; renderPage(); syncUrlState(); window.scrollTo(0,0); }
 
 function updateChips() {
   var tab = tabs[activeIdx]; var data = tab && tab.data ? tab.data : [];
@@ -1103,9 +1169,10 @@ function setFilter(dim, v) {
     b.classList.toggle('sel', arr[0] === 'all' ? b.dataset.v === 'all' : arr.indexOf(b.dataset.v) !== -1);
   });
   renderPage();
+  syncUrlState();
 }
 
-document.getElementById('search').addEventListener('input', function(e){ activeSearch = e.target.value; currentPage = 1; renderPage(); });
+document.getElementById('search').addEventListener('input', function(e){ activeSearch = e.target.value; currentPage = 1; renderPage(); syncUrlState(); });
 
 function scheduleSave(){ setStatus('Saving...','saving'); clearTimeout(saveTimer); saveTimer = setTimeout(doSave, 600); }
 function doSave() {
@@ -1128,9 +1195,25 @@ function copyMsg(btn, e) {
   e.stopPropagation();
   var pre = btn.previousElementSibling;
   var text = pre ? (pre.dataset.msg || pre.textContent) : '';
-  navigator.clipboard.writeText(text).then(function() {
+  copyTextToClipboard(text, function() {
     btn.textContent = 'Copied!'; btn.classList.add('copied');
     setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
+}
+
+function copyMsgText(btn, e) {
+  e.stopPropagation();
+  var clipSvg = btn.innerHTML;
+  var checkSvg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+  copyTextToClipboard(btn.dataset.msg || '', function() {
+    btn.classList.add('copied'); btn.innerHTML = checkSvg;
+    setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = clipSvg; }, 1500);
+  });
+}
+
+function copyTextToClipboard(text, onCopied) {
+  navigator.clipboard.writeText(text).then(function() {
+    if (onCopied) onCopied();
   });
 }
 
@@ -1157,15 +1240,35 @@ function setToday(btn, url) {
   dateInput.value = today;
   var entry = ensureEntry(url);
   if (!entry.outreach) entry.outreach = {};
+  entry.outreach.reached_out = true;
   entry.outreach.date = today;
   scheduleSave();
   updateContactedBadge(url);
+}
+function markContactedToday(btn, e, url) {
+  e.stopPropagation();
+  var entry = ensureEntry(url);
+  if (!entry.outreach) entry.outreach = {};
+  entry.outreach.reached_out = true;
+  entry.outreach.date = todayStr();
+  scheduleSave();
+  updateContactedBadge(url);
+  btn.classList.add('done');
+  if (expandedUrl === url && expandedTr) {
+    var checkbox = expandedTr.querySelector('.outreach-toggle input[type="checkbox"]');
+    var dateInput = expandedTr.querySelector('.date-input');
+    if (checkbox) checkbox.checked = true;
+    if (dateInput) dateInput.value = entry.outreach.date;
+  }
 }
 function updateContactedBadge(url) {
   var a = getAnn(url); var o = a.outreach || {};
   var text = (o.reached_out && o.date) ? formatContactDate(o.date) : '';
   document.querySelectorAll('[data-contact-badge="'+url+'"]').forEach(function(el) {
     el.textContent = text; el.style.display = text ? '' : 'none';
+  });
+  document.querySelectorAll('tr.data-row[data-url="'+url+'"] .contact-today-btn').forEach(function(btn) {
+    btn.classList.toggle('done', !!(o.reached_out && o.date === todayStr()));
   });
 }
 
