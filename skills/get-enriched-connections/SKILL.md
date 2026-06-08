@@ -1,6 +1,6 @@
 ---
-name: get-enriched-connections
-description: 'Use to start the full referral-finding pipeline, or to enrich LinkedIn connections. Triggers on: "find who to refer", "find someone to refer", "who in my network should I refer", "I want to refer someone to an open role", "enrich my connections", "get profile data for my connections", "prepare connections for ranking", "I have my Connections.csv", "I have my LinkedIn CSV", "I downloaded my connections", "here is my CSV", "I got the CSV".'
+name: ReferralFinder
+description: 'Use to start the full ReferralFinder pipeline, find referrals for open company roles, or enrich LinkedIn connections. Triggers on: "find who to refer", "find someone to refer", "who in my network should I refer", "I want to refer someone to an open role", "enrich my connections", "get profile data for my connections", "prepare connections for ranking", "I have my Connections.csv", "I have my LinkedIn CSV", "I downloaded my connections", "here is my CSV", "I got the CSV".'
 ---
 
 # Get Enriched Connections
@@ -122,16 +122,26 @@ python skills/get-enriched-connections/scripts/enrich_connections.py \
     --job-url "JOB_URL_IF_ANY"
 ```
 
-`--limit N` caps how many profiles are submitted to Apify (default: 1000). The script always picks the most-tenured (oldest connections first) up to that limit. Use the number the user chose from the coverage check.
+`--limit N` caps how many LinkedIn profile URLs are submitted to Apify (default: 1000). The script always picks the most-tenured (oldest connections first) up to that limit. Use the number the user chose from the coverage check. Rows with no LinkedIn URL are skipped before the limit is applied, so `--limit 40` means up to 40 actual profile URLs.
+
+The script submits Apify in batches. This is the only supported enrichment path:
+- `--batch-size 10` keeps each actor run within the free-user item limit seen on this actor.
+- `--concurrency 25` uses Apify's concurrent-run capacity without running more than 25 actor runs at once.
+- Each batch writes raw Apify output to `data/_apify_runs/<timestamp>/batch_XXXX.json`.
+- `data/connections_index.json` is updated only once, after all batch files are downloaded and combined. Do not run several enrichment scripts in parallel against the same index.
 
 The script will:
 1. Load and filter the CSV by keywords
 2. Skip any profiles already in `data/connections_index.json`
-3. Submit only new URLs to Apify — **saves run ID to `_apify_run.json` immediately** so it can be recovered if interrupted
-4. Poll until complete — tell the user this can take **up to 2 hours for ~1,000 connections**, but they don't need to do anything; Claude will notify them when it's done
-5. Download results and merge into `data/connections_index.json`
-6. Write new per-profile files to `data/profiles/`
-7. Delete `_apify_run.json` on success
+3. Skip rows with no LinkedIn URL, then apply `--limit`
+4. Submit only new URLs to Apify in 10-profile batch runs, up to 25 runs concurrently
+5. Save each batch's run ID, dataset ID, submitted URLs, and raw items into `data/_apify_runs/<timestamp>/`
+6. Poll until complete — tell the user this can take **up to 2 hours for ~1,000 connections**, but they don't need to do anything; Claude will notify them when it's done
+7. Combine all batch files, then merge once into `data/connections_index.json`
+8. Write new per-profile files to `data/profiles/`
+9. Delete `_apify_run.json` on success
+
+If Apify returns fewer profiles than submitted, do **not** assume LinkedIn blocked the profiles. Check the Apify run logs. Common causes include actor free-user item limits, actor errors, private/blocked profiles, scraper output shape changes, or LinkedIn blocking.
 
 **Tenure field semantics:** `tenureInRole` is kept as the CRM/index field name for compatibility, but it must represent tenure at the current company, not only the latest title at that company. When a profile has multiple current-company entries, use the longest duration for the current company so the CRM can estimate who may be more open to moving.
 
@@ -154,39 +164,43 @@ The count should match the number of new profiles added. If it didn't grow, see 
 
 ## Recovery (if script was interrupted after Apify submission)
 
-If the script crashes or is killed after submitting to Apify, `_apify_run.json` will exist with the run ID and dataset ID. Run with `--dataset-id` to download and merge without re-submitting:
+If the script crashes or is killed during a batched Apify run, `_apify_run.json` will point at the batch folder. If the batch files exist, merge without re-submitting:
 
 ```bash
 python skills/get-enriched-connections/scripts/enrich_connections.py \
     --csv "PATH_TO_CSV" \
     --token "APIFY_TOKEN" \
-    --dataset-id "DATASET_ID_FROM_APIFY_OR_RECOVERY_FILE"
+    --batch-dir "data/_apify_runs/YYYYMMDD_HHMMSS" \
+    --job-url "JOB_URL_IF_ANY"
 ```
 
-The dataset ID is in `_apify_run.json` (if it was saved before the crash), or find it in the Apify console: click the run → copy the Dataset ID shown on the run page.
+Do not use single-run dataset recovery. Batch files are the source of truth for enrichment recovery.
 
 ---
 
 ## Done
 
 Tell the user:
-- `data/connections_index.json` updated — N total entries (X new added)
-- `data/profiles/` — N total files
-- **Remind them to revoke the Apify token** at console.apify.com → Settings → API & Integrations → Delete
+- `data/connections_index.json` updated: N total entries (X new added)
+- `data/profiles/`: N total files
+- Raw Apify batch files are stored under `data/_apify_runs/<timestamp>/`
+- **Remind them to revoke the Apify token** at console.apify.com -> Settings -> API & Integrations -> Delete
 
 After the user confirms (or says they'll handle it), **automatically continue to rank their connections**: invoke the rank-connections skill and pass `JOB_URL` as the job URL for Step 0.
 
 ## Common Mistakes
 
 | Mistake | Fix |
-|---------|-----|
-| Asking for Apify token before showing the preview count | Always run Step 2 first — user should know the scope before committing |
+|---|---|
+| Asking for Apify token before showing the preview count | Always run Step 2 first: user should know the scope before committing |
 | Proceeding to Apify before user has Connections.csv | **Always wait** for the user to confirm they have the file before moving to Step 1 |
-| `UnicodeDecodeError` on CSV | Script uses `encoding='utf-8'` — should be fine. If not, open the CSV in Notepad and save as UTF-8. |
-| Using `.encode('ascii', 'replace')` only on final print | Apply it per field, not on the whole formatted string |
-| CSV rows 1–3 are LinkedIn notes | Script handles this — finds real header by scanning for `First Name` |
-| Not using `--limit` when user chose a specific count | The coverage command tells you the limit — pass it explicitly with `--limit N`. Default is 1000. |
-| Apify returns fewer profiles than submitted | Normal — LinkedIn blocks some. Script notes the count and continues. |
-| `connections_annotations.json` exists | Script auto-migrates it into the new index — no data lost. |
-| Index count didn't grow after script finished | Script may have been interrupted after Apify submission. Check `_apify_run.json` for the dataset ID, then re-run with `--dataset-id`. |
-| `_apify_run.json` exists at start of new run | A previous run may not have been merged. Recover it first with `--dataset-id` before starting a new submission. |
+| `UnicodeDecodeError` on CSV | Script uses `encoding='utf-8'`; if needed, open the CSV in Notepad and save as UTF-8 |
+| Using `.encode('ascii', 'replace')` only on final print | Apply encoding handling per field, not on the whole formatted string |
+| CSV rows 1-3 are LinkedIn notes | Script handles this by finding the real header with `First Name` |
+| Not using `--limit` when user chose a specific count | The coverage command tells you the limit. Pass it explicitly with `--limit N`; default is 1000. The script applies the limit after skipping missing URLs |
+| Apify free-user item limit exceeded | Use the built-in batch behavior: 10 profiles per run, up to 25 concurrent runs. Do not submit 40/500/1000 URLs in one actor run |
+| Running multiple enrichment scripts in parallel | Do not do this. Let one script create isolated batch files and merge once at the end. Parallel scripts can corrupt or overwrite `connections_index.json` |
+| Apify returns fewer profiles than submitted | Do not assume LinkedIn blocked them. Check Apify logs for actor limits, private/blocked profiles, actor errors, or output-shape changes |
+| `connections_annotations.json` exists | Script auto-migrates it into the new index; no data lost |
+| Index count didn't grow after script finished | Check whether Apify batch files contain usable URLs. If interrupted, re-run with `--batch-dir`. If all raw items lack URLs, inspect actor output/logs |
+| `_apify_run.json` exists at start of new run | A previous run may not have been merged. Recover it first with `--batch-dir` before starting a new submission |

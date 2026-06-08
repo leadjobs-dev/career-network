@@ -13,7 +13,7 @@ Outputs:
     connections_index.json   — URL-keyed map: display fields + blank annotation fields
     profiles/{handle}.json   — one file per person, full Apify data
 """
-import argparse, csv, json, os, re, time
+import argparse, concurrent.futures, csv, json, os, re, time
 from datetime import datetime, date
 
 
@@ -347,14 +347,127 @@ def download_apify_results(token, dataset_id):
     return resp.json()
 
 
+def chunks(items, size):
+    """Yield fixed-size chunks while preserving order."""
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _safe_batch_write(path, data):
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def run_apify_batch(token, batch_urls, batch_no, run_dir):
+    """Run one Apify batch and persist raw results without touching the index."""
+    batch_file = os.path.join(run_dir, f'batch_{batch_no:04d}.json')
+    print(f'  Batch {batch_no:04d}: submitting {len(batch_urls)} profiles')
+    run_id = submit_apify_run(token, batch_urls)
+    _safe_batch_write(batch_file, {
+        'batch': batch_no,
+        'runId': run_id,
+        'datasetId': None,
+        'status': 'SUBMITTED',
+        'profileUrls': batch_urls,
+        'items': [],
+    })
+
+    status, dataset_id = poll_apify_run(token, run_id)
+    raw = download_apify_results(token, dataset_id)
+    _safe_batch_write(batch_file, {
+        'batch': batch_no,
+        'runId': run_id,
+        'datasetId': dataset_id,
+        'status': status,
+        'profileUrls': batch_urls,
+        'items': raw,
+    })
+    print(f'  Batch {batch_no:04d}: {status}, downloaded {len(raw)} profiles')
+    return batch_file
+
+
+def run_apify_batches(token, profile_urls, output_dir, batch_size, concurrency):
+    """
+    Run Apify in isolated batch files, then return combined raw items.
+
+    Free Apify users can be capped at 10 items per run by some actors. Keeping
+    each batch isolated also prevents concurrent writes to connections_index.json.
+    """
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_dir = os.path.join(output_dir, '_apify_runs', timestamp)
+    os.makedirs(run_dir, exist_ok=True)
+    batches = list(chunks(profile_urls, batch_size))
+    concurrency = min(concurrency, 25)
+    print(f'Running {len(batches)} Apify batch(es) of up to {batch_size} profiles')
+    print(f'  Concurrency: {min(concurrency, len(batches))}')
+    print(f'  Batch output: {run_dir}')
+
+    save_run_state(run_dir)
+    completed = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(concurrency, len(batches))) as executor:
+        futures = {
+            executor.submit(run_apify_batch, token, batch_urls, i + 1, run_dir): i + 1
+            for i, batch_urls in enumerate(batches)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            batch_no = futures[future]
+            try:
+                completed.append(future.result())
+            except Exception as e:
+                print(f'  Batch {batch_no:04d}: ERROR: {e}')
+
+    expected_files = [os.path.join(run_dir, f'batch_{i + 1:04d}.json') for i in range(len(batches))]
+    missing = [p for p in expected_files if not os.path.exists(p)]
+    if missing:
+        raise RuntimeError(f'{len(missing)} Apify batch file(s) missing. Recover with --batch-dir "{run_dir}".')
+
+    raw = []
+    completed_urls = []
+    failed = []
+    for path in expected_files:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        completed_urls.extend(data.get('profileUrls') or [])
+        if data.get('status') not in ('SUCCEEDED',):
+            failed.append((path, data.get('status')))
+        raw.extend(data.get('items') or [])
+
+    if failed:
+        details = ', '.join(f'{os.path.basename(path)}={status}' for path, status in failed)
+        raise RuntimeError(f'Some Apify batches did not succeed: {details}. Recover with --batch-dir "{run_dir}" after fixing or rerunning failed batches.')
+    return raw, completed_urls, run_dir
+
+
+def load_apify_batches(batch_dir):
+    raw = []
+    profile_urls = []
+    files = sorted(
+        os.path.join(batch_dir, fn)
+        for fn in os.listdir(batch_dir)
+        if fn.startswith('batch_') and fn.endswith('.json')
+    )
+    if not files:
+        raise ValueError(f'No batch_*.json files found in {batch_dir}')
+    for path in files:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+        if data.get('status') != 'SUCCEEDED':
+            raise RuntimeError(f'{path} has status {data.get("status")}; refusing to merge incomplete batch output')
+        profile_urls.extend(data.get('profileUrls') or [])
+        raw.extend(data.get('items') or [])
+    return raw, profile_urls
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 RECOVERY_FILE = '_apify_run.json'
 
 
-def save_run_state(run_id, dataset_id=None):
+def save_run_state(batch_dir):
     with open(RECOVERY_FILE, 'w', encoding='utf-8') as f:
-        json.dump({'run_id': run_id, 'dataset_id': dataset_id}, f)
+        json.dump({'batch_dir': batch_dir}, f)
 
 
 def load_run_state():
@@ -376,34 +489,39 @@ def main():
     parser.add_argument('--limit',      type=int, default=1000, help='Max profiles to submit to Apify (default: 1000)')
     parser.add_argument('--job-url',    default='',     help='Job URL — saved to _meta if provided')
     parser.add_argument('--output-dir', default='data', help='Directory to write outputs (default: data/)')
-    parser.add_argument('--dataset-id', default='',     help='Skip submission and download from this Apify dataset ID directly (recovery mode)')
+    parser.add_argument('--batch-dir',  default='',     help='Merge previously downloaded Apify batch files from this directory')
+    parser.add_argument('--batch-size', type=int, default=10, help='Profiles per Apify run (default: 10)')
+    parser.add_argument('--concurrency', type=int, default=25, help='Max concurrent Apify runs (default: 25)')
     args = parser.parse_args()
 
     keywords = [k.strip() for k in args.keywords.split(',') if k.strip()]
     output_dir = args.output_dir
     index_path = os.path.join(output_dir, 'connections_index.json')
+    if args.batch_size < 1:
+        raise ValueError('--batch-size must be at least 1')
+    if args.concurrency < 1:
+        raise ValueError('--concurrency must be at least 1')
 
     # Check for leftover recovery file from a previous interrupted run
-    if not args.dataset_id:
+    if not args.batch_dir:
         state = load_run_state()
         if state:
-            print(f'WARNING: Found {RECOVERY_FILE} from a previous run (run_id={state["run_id"]}).')
-            print(f'  This means a previous enrichment may not have been merged.')
-            print(f'  To recover it, re-run with: --dataset-id {state.get("dataset_id") or "<check Apify console>"}')
+            print(f'WARNING: Found {RECOVERY_FILE} from a previous run.')
+            if state.get('batch_dir'):
+                print(f'  To merge downloaded batch files, re-run with: --batch-dir "{state["batch_dir"]}"')
+            else:
+                print('  This recovery file is from an older unsupported single-run flow.')
+                print('  Start a new batched run, or manually download old Apify data into a batch folder.')
             print(f'  Delete {RECOVERY_FILE} to suppress this warning.')
             print()
 
-    # Recovery mode: skip straight to download
-    if args.dataset_id:
-        print(f'Recovery mode: downloading from dataset {args.dataset_id}')
-        # Build csv_lookup from full CSV for _days_connected
+    if args.batch_dir:
+        print(f'Recovery mode: merging Apify batch files from {args.batch_dir}')
         rows_all = load_connections(args.csv)
         csv_lookup = {r.get('URL', '').strip().rstrip('/'): r for r in rows_all if r.get('URL', '').strip()}
-        raw = download_apify_results(args.token, args.dataset_id)
-        print(f'  Downloaded {len(raw)} profiles')
-        total = len(rows_all)
-        profile_urls = []  # unknown in recovery mode
-        _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, args.job_url, total)
+        raw, profile_urls = load_apify_batches(args.batch_dir)
+        print(f'  Loaded {len(raw)} raw profiles from batch files ({len(profile_urls)} submitted URLs)')
+        _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, args.job_url, len(rows_all))
         if os.path.exists(RECOVERY_FILE):
             os.remove(RECOVERY_FILE)
         return
@@ -425,16 +543,22 @@ def main():
     # Step 3b: Skip profiles already in the index (incremental enrichment)
     if os.path.exists(index_path):
         with open(index_path, encoding='utf-8') as f:
-            already = {u.rstrip('/').lower() for u in json.load(f)}
+            already = {u.rstrip('/').lower() for u in json.load(f) if not u.startswith('_')}
         before = len(rows)
         rows = [r for r in rows if r.get('URL', '').strip().rstrip('/').lower() not in already]
         skipped = before - len(rows)
         if skipped:
             print(f'  Already enriched: {skipped} skipped ({len(already)} total in index)')
 
+    before_url_filter = len(rows)
+    rows = [r for r in rows if r.get('URL', '').strip()]
+    skipped_no_url = before_url_filter - len(rows)
+    if skipped_no_url:
+        print(f'  No profile URL: {skipped_no_url} skipped')
+
     # Apply limit
     if len(rows) > args.limit:
-        print(f'  Applying limit: {args.limit} most-tenured selected from {len(rows)} candidates')
+        print(f'  Applying limit: {args.limit} most-tenured profile URLs selected from {len(rows)} candidates')
         rows = rows[:args.limit]
     print(f'  Enriching {len(rows)} connections')
 
@@ -447,27 +571,23 @@ def main():
         print('No LinkedIn URLs found in CSV. Nothing to enrich.')
         return
 
-    # Step 5: Submit to Apify — save run ID immediately so we can recover if interrupted
-    print(f'Submitting to Apify...')
-    run_id = submit_apify_run(args.token, profile_urls)
-    save_run_state(run_id)
-    print(f'  Run ID: {run_id}  (saved to {RECOVERY_FILE})')
-    print('  Polling (this takes 5-30 minutes)...')
+    # Step 5: Submit to Apify in isolated batches and merge only after all finish.
+    raw, submitted_urls, run_dir = run_apify_batches(
+        args.token,
+        profile_urls,
+        output_dir,
+        args.batch_size,
+        args.concurrency,
+    )
+    print(f'Downloaded {len(raw)} raw profiles from {len(submitted_urls)} submitted URLs')
+    if len(raw) < len(submitted_urls):
+        print(
+            f'  Note: {len(submitted_urls) - len(raw)} submitted URL(s) did not return data. '
+            'Check the Apify run logs for actor limits, blocked/private profiles, or other scraper errors.'
+        )
+    print(f'  Raw batch files kept in {run_dir}')
 
-    # Step 6: Poll
-    status, dataset_id = poll_apify_run(args.token, run_id)
-    save_run_state(run_id, dataset_id)
-    if status != 'SUCCEEDED':
-        print(f'  Apify run ended with status: {status}. Continuing with partial results.')
-
-    # Step 7: Download
-    print('Downloading results...')
-    raw = download_apify_results(args.token, dataset_id)
-    print(f'  Downloaded {len(raw)} profiles (submitted {len(profile_urls)})')
-    if len(raw) < len(profile_urls):
-        print(f'  Note: {len(profile_urls) - len(raw)} profiles blocked by LinkedIn (normal)')
-
-    _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, args.job_url, total)
+    _merge_and_write(raw, csv_lookup, submitted_urls, output_dir, index_path, args.job_url, total)
 
     # Clean up recovery file on success
     if os.path.exists(RECOVERY_FILE):
@@ -513,8 +633,10 @@ def _merge_and_write(raw, csv_lookup, profile_urls, output_dir, index_path, job_
         'filtered':      total > 1000,
     }
 
-    with open(index_path, 'w', encoding='utf-8') as f:
+    tmp_index_path = index_path + '.tmp'
+    with open(tmp_index_path, 'w', encoding='utf-8') as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_index_path, index_path)
 
     non_meta = sum(1 for k in merged if not k.startswith('_'))
     print(f'\nDone.')
