@@ -1,16 +1,35 @@
 # ReferralFinder
 
-Piotr and I created Leadjobs.dev after both of us experienced frustrating job searches - all the existing systems felt broken.
+[Piotr](https://www.linkedin.com/in/piotr-osi%C5%84ski-12919b43/) and [I](https://www.linkedin.com/in/anton-zaides/) created [Leadjobs.dev](https://leadjobs.dev/) after both of us experienced frustrating job searches - all the existing systems felt broken.
 
-We both ended up finding our next jobs by referalls - which seems to be the strongest option right now.
+We both ended up finding our next jobs by referrals - which seems to be the strongest option in 2026. So in parallel to continue improving [Leadjobs.dev](https://leadjobs.dev/), we decided to make referral finding as easy as possible for both sides.
 
-So in parallel to continue improving leadjobs.dev, we decided to make referall finding as easy as possible for both sides.
-
-This skill is the first part - helping people who already work, find referalls for open roles inside their company.
+This skill is the first part - helping people who already work, find referrals for open roles inside their company.
+Referrals is also a **HUGE WIN** - very **easy money**, great for the company, and great for the person that joins! 
 
 Super simple, free, and takes ~5 active minutes of your time (the rest is done by Claude).
 
-![Connections CRM showing ranked candidates](docs/crm-screenshot.png)
+**It will require:**
+- An active LinkedIn account (and a couple of clicks to export the data - which stays local!)
+- A free account on [Apify](https://apify.com/) 
+- Claude Code (or Codex, thought the skill was written for Claude Code)
+
+## The TLDR:
+
+- You'll be instructed how to download all your connections from LinkedIn
+- We will enrich their data for free with Apify
+- You'll provide a role URL, and Claude will find the relevant candidates
+- It will score them based on the role's requirements
+- You will be able to see the whole list (and also list per role) locally, on your own computer
+- You will be able to add details (who do you know, who's not a fit) which will also be saved 
+- For each candidate that fits, Claude will create a simple message you will be able to send them
+- Many cool UI options! (marking V when contacting, linkedin icon opens linkedin page with message already copied)
+
+Note: WE DON'T WANT TO SPAM PEOPLE! 
+There is no auto-sending messages. When we use this, we do spend a couple of seconds on each person to see if it's actually relevant for them. 
+
+It'll look like this:
+<img width="1728" height="614" alt="image" src="https://github.com/user-attachments/assets/aa207aab-789f-41ea-b0a1-ec9d9c2f379f" />
 
 ---
 
@@ -34,9 +53,7 @@ Claude handles the flow: exporting LinkedIn data, enriching profiles, scoring ca
 ## Setup (one time)
 
 **1.** Create a fresh folder on your computer.
-
 **2.** Open Claude Code in that folder. Desktop app: File -> Open Folder.
-
 **3.** Install ReferralFinder. Run this in the Claude Code terminal:
 
 ```bash
